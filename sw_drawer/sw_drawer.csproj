@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>CoordinateRunner</AssemblyName>
+    <LangVersion>7.3</LangVersion>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <StartupObject>sw_drawer.Program</StartupObject>
+    <PlatformTarget>x64</PlatformTarget>
+    
+    <!-- Read SolidWorks install path from registry -->
+    <SolidWorksInstallDir>$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\SolidWorks\Applications\SolidWorks', 'InstallDir', null, RegistryView.Registry64, RegistryView.Registry32))</SolidWorksInstallDir>
+    <SolidWorksApiPath Condition="'$(SolidWorksInstallDir)' != ''">$(SolidWorksInstallDir)api\redist</SolidWorksApiPath>
+  </PropertyGroup>
+
+  <Target Name="CheckSolidWorksPath" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(SolidWorksApiPath)' == ''" Text="SolidWorks not found in registry. Please install SolidWorks or set SolidWorksApiPath manually." />
+    <Error Condition="!Exists('$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll')" Text="SolidWorks API DLLs not found at: $(SolidWorksApiPath)" />
+    <Message Text="Found SolidWorks API at: $(SolidWorksApiPath)" Importance="high" />
+  </Target>
+  
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll</HintPath>
+      <Private>true</Private>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SolidWorksApiPath)\SolidWorks.Interop.swconst.dll</HintPath>
+      <Private>true</Private>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+  </ItemGroup>
+  
+  <Target Name="CopySolidWorksDlls" AfterTargets="Build">
+    <Copy SourceFiles="$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(SolidWorksApiPath)\SolidWorks.Interop.swconst.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

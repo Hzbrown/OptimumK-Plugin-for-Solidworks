@@ -1,0 +1,12 @@
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\sw_drawer.csproj.AssemblyReference.cache
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\sw_drawer.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\sw_drawer.csproj.CoreCompileInputs.cache
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\sw_drawer.sourcelink.json
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\bin\Release\net48\CoordinateRunner.exe.config
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\bin\Release\net48\CoordinateRunner.exe
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\bin\Release\net48\CoordinateRunner.pdb
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\CoordinateRunner.exe
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\CoordinateRunner.pdb
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\bin\Release\net48\SolidWorks.Interop.sldworks.dll
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\bin\Release\net48\SolidWorks.Interop.swconst.dll
+C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\sw_drawer\obj\Release\net48\sw_drawer.csproj.Up2Date
