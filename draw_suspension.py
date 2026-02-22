@@ -25,7 +25,26 @@ def insert_coordinate_system(name, x, y, z, angle_x=0.0, angle_y=0.0, angle_z=0.
     return result.returncode == 0
 
 
-def InsertHardpoint(suspension_data: dict, suffix: str, x_offset: float = 0.0):
+def count_hardpoints(suspension_data: dict) -> int:
+    """Count total hardpoints in suspension data."""
+    count = 0
+    for section_name, section_data in suspension_data.items():
+        if section_name == "Wheels":
+            continue
+        if not isinstance(section_data, dict):
+            continue
+        for point_name, coords in section_data.items():
+            if isinstance(coords, list) and len(coords) >= 3:
+                count += 1
+    return count
+
+
+def count_wheels(wheels_data: dict) -> int:
+    """Count total wheel coordinate systems (2 per axle)."""
+    return 2 if wheels_data else 0
+
+
+def InsertHardpoint(suspension_data: dict, suffix: str, x_offset: float = 0.0, progress_callback=None):
     """Insert all hardpoints from suspension data as coordinate systems."""
     for section_name, section_data in suspension_data.items():
         if section_name == "Wheels":
@@ -41,11 +60,13 @@ def InsertHardpoint(suspension_data: dict, suffix: str, x_offset: float = 0.0):
                 z = float(coords[2])
                 cs_name = f"{point_name}{suffix}"
                 insert_coordinate_system(cs_name, x, y, z)
+                if progress_callback:
+                    progress_callback(1)
             except Exception as e:
                 print(f"Error inserting {point_name}{suffix}: {e}")
 
 
-def InsertWheel(wheels_data: dict, reference_distance: float, is_rear: bool):
+def InsertWheel(wheels_data: dict, reference_distance: float, is_rear: bool, progress_callback=None):
     """Insert wheel coordinate systems with toe and camber angles."""
     try:
         half_track = float(wheels_data["Half Track"]["left"])
@@ -64,9 +85,13 @@ def InsertWheel(wheels_data: dict, reference_distance: float, is_rear: bool):
         
         # Left wheel (positive Y)
         insert_coordinate_system(f"{prefix}L_wheel", x_base, y_base, z, camber, 0.0, toe)
+        if progress_callback:
+            progress_callback(1)
         
         # Right wheel (negative Y, mirrored angles)
         insert_coordinate_system(f"{prefix}R_wheel", x_base, -y_base, z, -camber, 0.0, -toe)
+        if progress_callback:
+            progress_callback(1)
         
     except KeyError as e:
         print(f"Error: Missing wheel parameter {e}")
@@ -74,35 +99,42 @@ def InsertWheel(wheels_data: dict, reference_distance: float, is_rear: bool):
         print(f"Error inserting wheels: {e}")
 
 
-def draw_front_suspension(front_suspension_path: str):
-    """Draw front suspension from JSON file."""
+def draw_front_suspension(front_suspension_path: str, progress_callback=None):
+    """Draw front suspension from JSON file. Returns total coordinate systems inserted."""
     front_data = load_json(front_suspension_path)
+    total = count_hardpoints(front_data) + count_wheels(front_data.get("Wheels", {}))
     
     print("=== Inserting Front Hardpoints ===")
-    InsertHardpoint(front_data, "_FRONT", x_offset=0.0)
+    InsertHardpoint(front_data, "_FRONT", x_offset=0.0, progress_callback=progress_callback)
     
     print("=== Inserting Front Wheels ===")
-    InsertWheel(front_data.get("Wheels", {}), reference_distance=0.0, is_rear=False)
+    InsertWheel(front_data.get("Wheels", {}), reference_distance=0.0, is_rear=False, progress_callback=progress_callback)
+    
+    return total
 
 
-def draw_rear_suspension(rear_suspension_path: str, vehicle_setup_path: str):
-    """Draw rear suspension from JSON file with reference distance offset."""
+def draw_rear_suspension(rear_suspension_path: str, vehicle_setup_path: str, progress_callback=None):
+    """Draw rear suspension from JSON file with reference distance offset. Returns total coordinate systems inserted."""
     rear_data = load_json(rear_suspension_path)
     vehicle_data = load_json(vehicle_setup_path)
     
     reference_distance = float(vehicle_data.get("Reference distance", 0.0))
+    total = count_hardpoints(rear_data) + count_wheels(rear_data.get("Wheels", {}))
     
     print("=== Inserting Rear Hardpoints ===")
-    InsertHardpoint(rear_data, "_REAR", x_offset=reference_distance)
+    InsertHardpoint(rear_data, "_REAR", x_offset=reference_distance, progress_callback=progress_callback)
     
     print("=== Inserting Rear Wheels ===")
-    InsertWheel(rear_data.get("Wheels", {}), reference_distance=reference_distance, is_rear=True)
+    InsertWheel(rear_data.get("Wheels", {}), reference_distance=reference_distance, is_rear=True, progress_callback=progress_callback)
+    
+    return total
 
 
-def draw_full_suspension(front_path: str, rear_path: str, vehicle_setup_path: str):
-    """Draw complete suspension from all JSON files."""
-    draw_front_suspension(front_path)
-    draw_rear_suspension(rear_path, vehicle_setup_path)
+def draw_full_suspension(front_path: str, rear_path: str, vehicle_setup_path: str, progress_callback=None):
+    """Draw complete suspension from all JSON files. Returns total coordinate systems inserted."""
+    front_total = draw_front_suspension(front_path, progress_callback=progress_callback)
+    rear_total = draw_rear_suspension(rear_path, vehicle_setup_path, progress_callback=progress_callback)
+    return front_total + rear_total
 
 
 if __name__ == "__main__":
