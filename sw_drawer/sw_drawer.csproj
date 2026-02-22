@@ -8,15 +8,24 @@
     <StartupObject>sw_drawer.Program</StartupObject>
     <PlatformTarget>x64</PlatformTarget>
     
-    <!-- Read SolidWorks install path from registry -->
-    <SolidWorksInstallDir>$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\SolidWorks\Applications\SolidWorks', 'InstallDir', null, RegistryView.Registry64, RegistryView.Registry32))</SolidWorksInstallDir>
+    <!-- Try registry paths for SolidWorks -->
+    <SolidWorksInstallDir Condition="'$(SolidWorksInstallDir)' == ''">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\SolidWorks\Applications\SolidWorks', 'InstallDir', null, RegistryView.Registry64, RegistryView.Registry32))</SolidWorksInstallDir>
+    <SolidWorksInstallDir Condition="'$(SolidWorksInstallDir)' == ''">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\SolidWorks\SOLIDWORKS', 'InstallPath', null, RegistryView.Registry64, RegistryView.Registry32))</SolidWorksInstallDir>
+    
     <SolidWorksApiPath Condition="'$(SolidWorksInstallDir)' != ''">$(SolidWorksInstallDir)api\redist</SolidWorksApiPath>
+    
+    <!-- Fallback: hardcoded common paths (evaluated at property time) -->
+    <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksApiPath>
+    <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (2)\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (2)\api\redist</SolidWorksApiPath>
+    <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (3)\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (3)\api\redist</SolidWorksApiPath>
+    <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files\SolidWorks Corp\SolidWorks\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files\SolidWorks Corp\SolidWorks\api\redist</SolidWorksApiPath>
+    <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files (x86)\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files (x86)\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksApiPath>
   </PropertyGroup>
 
   <Target Name="CheckSolidWorksPath" BeforeTargets="ResolveAssemblyReferences">
-    <Error Condition="'$(SolidWorksApiPath)' == ''" Text="SolidWorks not found in registry. Please install SolidWorks or set SolidWorksApiPath manually." />
-    <Error Condition="!Exists('$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll')" Text="SolidWorks API DLLs not found at: $(SolidWorksApiPath)" />
-    <Message Text="Found SolidWorks API at: $(SolidWorksApiPath)" Importance="high" />
+    <Message Text="SolidWorksApiPath = $(SolidWorksApiPath)" Importance="high" />
+    <Error Condition="'$(SolidWorksApiPath)' == ''" Text="SolidWorks API not found. Set SolidWorksApiPath property manually: dotnet build -p:SolidWorksApiPath=&quot;C:\path\to\api\redist&quot;" />
+    <Error Condition="!Exists('$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll')" Text="SolidWorks.Interop.sldworks.dll not found at: $(SolidWorksApiPath)" />
   </Target>
   
   <ItemGroup>
