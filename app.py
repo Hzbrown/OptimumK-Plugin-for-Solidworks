@@ -3,37 +3,56 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
                              QProgressBar)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 import json
 
-# Add parent directory to path to import draw_suspension
 sys.path.insert(0, os.path.dirname(__file__))
 from draw_suspension import (draw_full_suspension, draw_front_suspension, draw_rear_suspension,
                               count_hardpoints, count_wheels, load_json)
 from optimumSheetParser import OptimumSheetParser
+from test_solidworks_connection import get_active_document_name
+
+
+class QtStream(QObject):
+    """Redirect stdout to a PyQt signal."""
+    text_written = pyqtSignal(str)
+
+    def write(self, text):
+        if text.strip():
+            self.text_written.emit(text.strip())
+
+    def flush(self):
+        pass
 
 
 class SolidWorksWorker(QThread):
     """Worker thread for SolidWorks operations."""
-    finished = pyqtSignal(bool, str)  # success, message
-    progress = pyqtSignal(int)  # increment progress
-    
+    finished = pyqtSignal(bool, str)
+    progress = pyqtSignal(int)
+    log = pyqtSignal(str)
+
     def __init__(self, operation, total_count, *args):
         super().__init__()
         self.operation = operation
         self.total_count = total_count
         self.args = args
-    
+
     def progress_callback(self, count):
-        """Called by draw_suspension functions to report progress."""
         self.progress.emit(count)
-    
+
     def run(self):
+        # Redirect stdout to log signal for this thread
+        stream = QtStream()
+        stream.text_written.connect(self.log.emit)
+        old_stdout = sys.stdout
+        sys.stdout = stream
         try:
             self.operation(*self.args, progress_callback=self.progress_callback)
             self.finished.emit(True, "Suspension imported successfully")
         except Exception as e:
             self.finished.emit(False, str(e))
+        finally:
+            sys.stdout = old_stdout
 
 
 class ImportOptimumKTab(QWidget):
@@ -141,136 +160,143 @@ class WriteSolidworksTab(QWidget):
     
     def init_ui(self):
         layout = QVBoxLayout()
-        
-        layout.addWidget(QLabel("Write to SolidWorks"))
+
+        # Top bar with title on left, connection button on right
+        h_top = QHBoxLayout()
+        h_top.addWidget(QLabel("Write to SolidWorks"))
+        h_top.addStretch()
+        self.connection_label = QLabel("Not tested")
+        h_top.addWidget(self.connection_label)
+        btn_test_connection = QPushButton("Test Connection")
+        btn_test_connection.clicked.connect(self.test_solidworks_connection)
+        h_top.addWidget(btn_test_connection)
+        layout.addLayout(h_top)
+
         layout.addWidget(QLabel("Import suspension geometry into SolidWorks"))
-        
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
-        
+
         # Suspension import buttons
         layout.addWidget(QLabel("Import Suspension to SolidWorks:"))
-        
+
         self.btn_import_full = QPushButton("Import Full Suspension")
         self.btn_import_full.clicked.connect(self.import_full_suspension)
         layout.addWidget(self.btn_import_full)
-        
+
         self.btn_import_front = QPushButton("Import Front Suspension Only")
         self.btn_import_front.clicked.connect(self.import_front_suspension)
         layout.addWidget(self.btn_import_front)
-        
+
         self.btn_import_rear = QPushButton("Import Rear Suspension Only")
         self.btn_import_rear.clicked.connect(self.import_rear_suspension)
         layout.addWidget(self.btn_import_rear)
-        
-        # Status text
+
+        # Status / console output text box
+        layout.addWidget(QLabel("Console Output:"))
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
-        self.status_text.setText("SolidWorks Integration Status:\n\n• Waiting for operations...\n• Ensure SolidWorks is running\n• Parse Excel file in Import tab first")
+        self.status_text.setFontFamily("Courier")
+        self.status_text.setText("• Click 'Test Connection' to verify SolidWorks is running\n• Parse Excel file in Import tab first")
         layout.addWidget(self.status_text)
-        
-        btn_clear = QPushButton("Clear Status")
+
+        btn_clear = QPushButton("Clear")
         btn_clear.clicked.connect(lambda: self.status_text.clear())
         layout.addWidget(btn_clear)
-        
+
         layout.addStretch()
         self.setLayout(layout)
-    
+
+    def append_log(self, text):
+        self.status_text.append(text)
+
+    def test_solidworks_connection(self):
+        try:
+            doc_name = get_active_document_name()
+            self.connection_label.setText(f"✓ {doc_name}")
+            self.status_text.append(f"✓ Connected — Active document: {doc_name}")
+        except Exception as e:
+            self.connection_label.setText("✗ Not connected")
+            self.status_text.append(f"✗ Connection failed: {str(e)}")
+            QMessageBox.critical(self, "SolidWorks Connection Error",
+                                 f"Could not connect to SolidWorks:\n\n{str(e)}\n\n"
+                                 "Make sure:\n• SolidWorks is running\n• A document is open\n• pywin32 is installed")
+
     def set_buttons_enabled(self, enabled):
-        """Enable or disable import buttons."""
         self.btn_import_full.setEnabled(enabled)
         self.btn_import_front.setEnabled(enabled)
         self.btn_import_rear.setEnabled(enabled)
-    
+
     def start_loading(self, message, total_count):
-        """Start loading indicator with known total."""
         self.progress_bar.setMaximum(total_count)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.set_buttons_enabled(False)
         self.status_text.append(f"\n{message}")
-    
+
     def on_progress(self, count):
-        """Update progress bar."""
         self.progress_bar.setValue(self.progress_bar.value() + count)
-    
+
     def stop_loading(self, success, message):
-        """Stop loading indicator and show result."""
         self.progress_bar.setVisible(False)
         self.set_buttons_enabled(True)
-        
         if success:
             self.status_text.append(f"✓ {message}")
             QMessageBox.information(self, "Success", message)
         else:
             self.status_text.append(f"✗ Error: {message}")
             QMessageBox.critical(self, "Error", f"Import failed: {message}")
-    
+
+    def _start_worker(self, operation, total, *args):
+        self.start_loading(f"Running {operation.__name__}...", total)
+        self.worker = SolidWorksWorker(operation, total, *args)
+        self.worker.log.connect(self.append_log)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.stop_loading)
+        self.worker.start()
+
     def import_full_suspension(self):
         front_file = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
         rear_file = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
         vehicle_file = os.path.join(os.path.dirname(__file__), "temp", "Vehicle_Setup.json")
-        
+
         if not all(os.path.exists(f) for f in [front_file, rear_file, vehicle_file]):
-            QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first to generate JSON files")
+            QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first")
             return
-        
         try:
-            front_data = load_json(front_file)
-            rear_data = load_json(rear_file)
-            
-            front_total = count_hardpoints(front_data) + count_wheels(front_data.get("Wheels", {}))
-            rear_total = count_hardpoints(rear_data) + count_wheels(rear_data.get("Wheels", {}))
-            total = front_total + rear_total
-            
-            self.start_loading("Importing full suspension...", total)
-            self.worker = SolidWorksWorker(draw_full_suspension, total, front_file, rear_file, vehicle_file)
-            self.worker.progress.connect(self.on_progress)
-            self.worker.finished.connect(self.stop_loading)
-            self.worker.start()
+            front_data, rear_data = load_json(front_file), load_json(rear_file)
+            total = (count_hardpoints(front_data) + count_wheels(front_data.get("Wheels", {})) +
+                     count_hardpoints(rear_data) + count_wheels(rear_data.get("Wheels", {})))
+            self._start_worker(draw_full_suspension, total, front_file, rear_file, vehicle_file)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to calculate progress: {str(e)}")
-    
+            QMessageBox.critical(self, "Error", str(e))
+
     def import_front_suspension(self):
         front_file = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        
         if not os.path.exists(front_file):
-            QMessageBox.warning(self, "Missing File", "Please parse an Excel file first to generate JSON files")
+            QMessageBox.warning(self, "Missing File", "Please parse an Excel file first")
             return
-        
         try:
             front_data = load_json(front_file)
             total = count_hardpoints(front_data) + count_wheels(front_data.get("Wheels", {}))
-            
-            self.start_loading("Importing front suspension...", total)
-            self.worker = SolidWorksWorker(draw_front_suspension, total, front_file)
-            self.worker.progress.connect(self.on_progress)
-            self.worker.finished.connect(self.stop_loading)
-            self.worker.start()
+            self._start_worker(draw_front_suspension, total, front_file)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to calculate progress: {str(e)}")
-    
+            QMessageBox.critical(self, "Error", str(e))
+
     def import_rear_suspension(self):
         rear_file = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
         vehicle_file = os.path.join(os.path.dirname(__file__), "temp", "Vehicle_Setup.json")
-        
         if not all(os.path.exists(f) for f in [rear_file, vehicle_file]):
-            QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first to generate JSON files")
+            QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first")
             return
-        
         try:
             rear_data = load_json(rear_file)
             total = count_hardpoints(rear_data) + count_wheels(rear_data.get("Wheels", {}))
-            
-            self.start_loading("Importing rear suspension...", total)
-            self.worker = SolidWorksWorker(draw_rear_suspension, total, rear_file, vehicle_file)
-            self.worker.progress.connect(self.on_progress)
-            self.worker.finished.connect(self.stop_loading)
-            self.worker.start()
+            self._start_worker(draw_rear_suspension, total, rear_file, vehicle_file)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to calculate progress: {str(e)}")
+            QMessageBox.critical(self, "Error", str(e))
 
 
 class HelpTab(QWidget):
