@@ -1,0 +1,6 @@
+C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\obj\Release\net48\VisibilityRunner.csproj.AssemblyReference.cache
+C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\obj\Release\net48\VisibilityRunner.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\obj\Release\net48\VisibilityRunner.AssemblyInfoInputs.cache
+C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\obj\Release\net48\VisibilityRunner.AssemblyInfo.cs
+C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\obj\Release\net48\VisibilityRunner.csproj.CoreCompileInputs.cache
+C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\obj\Release\net48\VisibilityRunner.sourcelink.json

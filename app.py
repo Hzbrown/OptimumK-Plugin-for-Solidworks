@@ -2,14 +2,19 @@ import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
-                             QProgressBar)
+                             QProgressBar, QGroupBox, QGridLayout, QCheckBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 import json
 
 sys.path.insert(0, os.path.dirname(__file__))
 from draw_suspension import (draw_full_suspension, draw_front_suspension, draw_rear_suspension,
-                              count_hardpoints, count_wheels, load_json)
+                              count_hardpoints, count_wheels, load_json,
+                              set_front_suspension_visibility, set_rear_suspension_visibility,
+                              set_all_wheels_visibility, set_front_wheels_visibility,
+                              set_rear_wheels_visibility, set_chassis_points_visibility,
+                              set_non_chassis_visibility, set_all_suspension_visibility,
+                              set_visibility_by_substring)
 from optimumSheetParser import OptimumSheetParser
 from test_solidworks_connection import get_active_document_name
 
@@ -300,6 +305,188 @@ class WriteSolidworksTab(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
 
+class ViewTab(QWidget):
+    """Tab for controlling visibility of suspension features in SolidWorks."""
+    
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout()
+        
+        # Title
+        layout.addWidget(QLabel("Control Visibility of Suspension Features"))
+        
+        # Status/console output
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
+        self.status_text.setFontFamily("Courier")
+        self.status_text.setMaximumHeight(100)
+        self.status_text.setText("Toggle visibility of suspension components in SolidWorks")
+        
+        # Main suspension groups
+        group_main = QGroupBox("Suspension Groups")
+        grid_main = QGridLayout()
+        
+        self.btn_show_all = QPushButton("Show All")
+        self.btn_show_all.clicked.connect(lambda: self.set_visibility(set_all_suspension_visibility, True, "all"))
+        grid_main.addWidget(self.btn_show_all, 0, 0)
+        
+        self.btn_hide_all = QPushButton("Hide All")
+        self.btn_hide_all.clicked.connect(lambda: self.set_visibility(set_all_suspension_visibility, False, "all"))
+        grid_main.addWidget(self.btn_hide_all, 0, 1)
+        
+        self.btn_show_front = QPushButton("Show Front")
+        self.btn_show_front.clicked.connect(lambda: self.set_visibility(set_front_suspension_visibility, True, "front"))
+        grid_main.addWidget(self.btn_show_front, 1, 0)
+        
+        self.btn_hide_front = QPushButton("Hide Front")
+        self.btn_hide_front.clicked.connect(lambda: self.set_visibility(set_front_suspension_visibility, False, "front"))
+        grid_main.addWidget(self.btn_hide_front, 1, 1)
+        
+        self.btn_show_rear = QPushButton("Show Rear")
+        self.btn_show_rear.clicked.connect(lambda: self.set_visibility(set_rear_suspension_visibility, True, "rear"))
+        grid_main.addWidget(self.btn_show_rear, 2, 0)
+        
+        self.btn_hide_rear = QPushButton("Hide Rear")
+        self.btn_hide_rear.clicked.connect(lambda: self.set_visibility(set_rear_suspension_visibility, False, "rear"))
+        grid_main.addWidget(self.btn_hide_rear, 2, 1)
+        
+        group_main.setLayout(grid_main)
+        layout.addWidget(group_main)
+        
+        # Wheels group
+        group_wheels = QGroupBox("Wheels")
+        grid_wheels = QGridLayout()
+        
+        self.btn_show_wheels = QPushButton("Show All Wheels")
+        self.btn_show_wheels.clicked.connect(lambda: self.set_visibility(set_all_wheels_visibility, True, "wheels"))
+        grid_wheels.addWidget(self.btn_show_wheels, 0, 0)
+        
+        self.btn_hide_wheels = QPushButton("Hide All Wheels")
+        self.btn_hide_wheels.clicked.connect(lambda: self.set_visibility(set_all_wheels_visibility, False, "wheels"))
+        grid_wheels.addWidget(self.btn_hide_wheels, 0, 1)
+        
+        self.btn_show_front_wheels = QPushButton("Show Front Wheels")
+        self.btn_show_front_wheels.clicked.connect(lambda: self.set_visibility(set_front_wheels_visibility, True, "front wheels"))
+        grid_wheels.addWidget(self.btn_show_front_wheels, 1, 0)
+        
+        self.btn_hide_front_wheels = QPushButton("Hide Front Wheels")
+        self.btn_hide_front_wheels.clicked.connect(lambda: self.set_visibility(set_front_wheels_visibility, False, "front wheels"))
+        grid_wheels.addWidget(self.btn_hide_front_wheels, 1, 1)
+        
+        self.btn_show_rear_wheels = QPushButton("Show Rear Wheels")
+        self.btn_show_rear_wheels.clicked.connect(lambda: self.set_visibility(set_rear_wheels_visibility, True, "rear wheels"))
+        grid_wheels.addWidget(self.btn_show_rear_wheels, 2, 0)
+        
+        self.btn_hide_rear_wheels = QPushButton("Hide Rear Wheels")
+        self.btn_hide_rear_wheels.clicked.connect(lambda: self.set_visibility(set_rear_wheels_visibility, False, "rear wheels"))
+        grid_wheels.addWidget(self.btn_hide_rear_wheels, 2, 1)
+        
+        group_wheels.setLayout(grid_wheels)
+        layout.addWidget(group_wheels)
+        
+        # Chassis/Non-Chassis group
+        group_chassis = QGroupBox("Chassis vs Non-Chassis Points")
+        grid_chassis = QGridLayout()
+        
+        self.btn_show_chassis = QPushButton("Show Chassis Points")
+        self.btn_show_chassis.clicked.connect(lambda: self.set_visibility(set_chassis_points_visibility, True, "chassis points"))
+        grid_chassis.addWidget(self.btn_show_chassis, 0, 0)
+        
+        self.btn_hide_chassis = QPushButton("Hide Chassis Points")
+        self.btn_hide_chassis.clicked.connect(lambda: self.set_visibility(set_chassis_points_visibility, False, "chassis points"))
+        grid_chassis.addWidget(self.btn_hide_chassis, 0, 1)
+        
+        self.btn_show_nonchassis = QPushButton("Show Non-Chassis")
+        self.btn_show_nonchassis.clicked.connect(lambda: self.set_visibility(set_non_chassis_visibility, True, "non-chassis points"))
+        grid_chassis.addWidget(self.btn_show_nonchassis, 1, 0)
+        
+        self.btn_hide_nonchassis = QPushButton("Hide Non-Chassis")
+        self.btn_hide_nonchassis.clicked.connect(lambda: self.set_visibility(set_non_chassis_visibility, False, "non-chassis points"))
+        grid_chassis.addWidget(self.btn_hide_nonchassis, 1, 1)
+        
+        group_chassis.setLayout(grid_chassis)
+        layout.addWidget(group_chassis)
+        
+        # Custom substring search
+        group_custom = QGroupBox("Custom Filter (by name substring)")
+        h_custom = QHBoxLayout()
+        
+        from PyQt5.QtWidgets import QLineEdit
+        self.custom_filter = QLineEdit()
+        self.custom_filter.setPlaceholderText("Enter text to match (e.g., 'Upright', 'Pushrod')")
+        h_custom.addWidget(self.custom_filter)
+        
+        btn_show_custom = QPushButton("Show")
+        btn_show_custom.clicked.connect(self.show_custom)
+        h_custom.addWidget(btn_show_custom)
+        
+        btn_hide_custom = QPushButton("Hide")
+        btn_hide_custom.clicked.connect(self.hide_custom)
+        h_custom.addWidget(btn_hide_custom)
+        
+        group_custom.setLayout(h_custom)
+        layout.addWidget(group_custom)
+        
+        # Console output
+        layout.addWidget(QLabel("Output:"))
+        layout.addWidget(self.status_text)
+        
+        btn_clear = QPushButton("Clear Log")
+        btn_clear.clicked.connect(lambda: self.status_text.clear())
+        layout.addWidget(btn_clear)
+        
+        layout.addStretch()
+        self.setLayout(layout)
+    
+    def set_visibility(self, func, visible, description):
+        """Execute a visibility function and update status."""
+        action = "Showing" if visible else "Hiding"
+        self.status_text.append(f"{action} {description}...")
+        try:
+            success = func(visible)
+            if success:
+                self.status_text.append(f"✓ {description} {'shown' if visible else 'hidden'}")
+            else:
+                self.status_text.append(f"✗ Failed to modify {description}")
+        except FileNotFoundError as e:
+            self.status_text.append(f"✗ Error: {str(e)}")
+            QMessageBox.critical(self, "Error", 
+                                 f"SuspensionTools.exe not found.\n\n"
+                                 "Run 'dotnet build -c Release' in the sw_drawer folder first.")
+        except Exception as e:
+            self.status_text.append(f"✗ Error: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed: {str(e)}")
+    
+    def show_custom(self):
+        """Show features matching custom filter."""
+        text = self.custom_filter.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Please enter a filter text")
+            return
+        self.status_text.append(f"Showing features containing '{text}'...")
+        try:
+            set_visibility_by_substring(text, True)
+            self.status_text.append(f"✓ Done")
+        except Exception as e:
+            self.status_text.append(f"✗ Error: {str(e)}")
+    
+    def hide_custom(self):
+        """Hide features matching custom filter."""
+        text = self.custom_filter.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Please enter a filter text")
+            return
+        self.status_text.append(f"Hiding features containing '{text}'...")
+        try:
+            set_visibility_by_substring(text, False)
+            self.status_text.append(f"✓ Done")
+        except Exception as e:
+            self.status_text.append(f"✗ Error: {str(e)}")
+
+
 class HelpTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -324,12 +511,13 @@ class OptimumKApp(QMainWindow):
     
     def init_ui(self):
         self.setWindowTitle("OptimumK SolidWorks Plugin")
-        self.setGeometry(100, 100, 600, 500)
+        self.setGeometry(100, 100, 600, 600)
         
         tabs = QTabWidget()
         
         tabs.addTab(ImportOptimumKTab(), "Import OptimumK")
         tabs.addTab(WriteSolidworksTab(), "Write to SolidWorks")
+        tabs.addTab(ViewTab(), "View")
         tabs.addTab(HelpTab(), "Help")
         
         self.setCentralWidget(tabs)

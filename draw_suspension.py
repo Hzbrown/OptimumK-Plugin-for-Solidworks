@@ -3,7 +3,7 @@ import os
 import subprocess
 
 SCRIPT_DIR = os.path.dirname(__file__)
-CS_EXE = os.path.join(SCRIPT_DIR, "sw_drawer", "bin", "Release", "net48", "CoordinateRunner.exe")
+TOOLS_EXE = os.path.join(SCRIPT_DIR, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe")
 
 
 def load_json(file_path):
@@ -13,10 +13,10 @@ def load_json(file_path):
 
 
 def insert_coordinate_system(name, x, y, z, angle_x=0.0, angle_y=0.0, angle_z=0.0):
-    """Call C# CoordinateRunner.exe via subprocess."""
-    if not os.path.exists(CS_EXE):
-        raise FileNotFoundError(f"CoordinateRunner.exe not found at {CS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
-    args = [CS_EXE, name, str(x), str(y), str(z), str(angle_x), str(angle_y), str(angle_z)]
+    """Call C# SuspensionTools.exe via subprocess."""
+    if not os.path.exists(TOOLS_EXE):
+        raise FileNotFoundError(f"SuspensionTools.exe not found at {TOOLS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
+    args = [TOOLS_EXE, name, str(x), str(y), str(z), str(angle_x), str(angle_y), str(angle_z)]
     result = subprocess.run(args, capture_output=True, text=True)
     if result.stdout:
         print(result.stdout.strip())
@@ -135,6 +135,76 @@ def draw_full_suspension(front_path: str, rear_path: str, vehicle_setup_path: st
     front_total = draw_front_suspension(front_path, progress_callback=progress_callback)
     rear_total = draw_rear_suspension(rear_path, vehicle_setup_path, progress_callback=progress_callback)
     return front_total + rear_total
+
+
+# ==================== Visibility Control Functions ====================
+
+def _run_visibility_command(command: str, visible: bool, parameter: str = None) -> bool:
+    """Run SuspensionTools.exe visibility command via subprocess."""
+    if not os.path.exists(TOOLS_EXE):
+        raise FileNotFoundError(f"SuspensionTools.exe not found at {TOOLS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
+    
+    vis_str = "show" if visible else "hide"
+    args = [TOOLS_EXE, "vis", command, vis_str]
+    if parameter:
+        args.append(parameter)
+    
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip())
+    return result.returncode == 0
+
+
+def set_feature_visibility(feature_name: str, visible: bool) -> bool:
+    """Show or hide a specific feature by name."""
+    return _run_visibility_command("feature", visible, feature_name)
+
+
+def set_front_suspension_visibility(visible: bool) -> bool:
+    """Show or hide all front suspension points and wheels."""
+    return _run_visibility_command("front", visible)
+
+
+def set_rear_suspension_visibility(visible: bool) -> bool:
+    """Show or hide all rear suspension points and wheels."""
+    return _run_visibility_command("rear", visible)
+
+
+def set_all_wheels_visibility(visible: bool) -> bool:
+    """Show or hide all wheel coordinate systems."""
+    return _run_visibility_command("wheels", visible)
+
+
+def set_front_wheels_visibility(visible: bool) -> bool:
+    """Show or hide front wheels only."""
+    return _run_visibility_command("frontwheels", visible)
+
+
+def set_rear_wheels_visibility(visible: bool) -> bool:
+    """Show or hide rear wheels only."""
+    return _run_visibility_command("rearwheels", visible)
+
+
+def set_chassis_points_visibility(visible: bool) -> bool:
+    """Show or hide all chassis pickup points."""
+    return _run_visibility_command("chassis", visible)
+
+
+def set_non_chassis_visibility(visible: bool) -> bool:
+    """Show or hide all non-chassis suspension points (uprights, pushrods, etc.)."""
+    return _run_visibility_command("nonchassis", visible)
+
+
+def set_all_suspension_visibility(visible: bool) -> bool:
+    """Show or hide all suspension features."""
+    return _run_visibility_command("all", visible)
+
+
+def set_visibility_by_substring(substring: str, visible: bool) -> bool:
+    """Show or hide features containing a specific substring."""
+    return _run_visibility_command("substring", visible, substring)
 
 
 if __name__ == "__main__":

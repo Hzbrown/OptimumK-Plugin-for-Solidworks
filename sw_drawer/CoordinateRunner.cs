@@ -5,13 +5,14 @@ using SolidWorks.Interop.swconst;
 
 namespace sw_drawer
 {
-    class Program
+    // Renamed from Program to CoordinateRunner to avoid conflict
+    public static class CoordinateLauncher
     {
-        static int Main(string[] args)
+        public static int RunCoordinate(string[] args)
         {
             if (args.Length < 4)
             {
-                Console.WriteLine("Usage: CoordinateRunner.exe <name> <x> <y> <z> [angleX] [angleY] [angleZ]");
+                Console.WriteLine("Usage: SuspensionTools <name> <x> <y> <z> [angleX] [angleY] [angleZ]");
                 return 1;
             }
 

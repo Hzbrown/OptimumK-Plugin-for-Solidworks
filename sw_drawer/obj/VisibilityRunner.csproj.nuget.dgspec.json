@@ -1,15 +1,15 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj": {}
+    "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\VisibilityRunner.csproj": {}
   },
   "projects": {
-    "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj": {
+    "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\VisibilityRunner.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj",
-        "projectName": "SuspensionTools",
-        "projectPath": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj",
+        "projectUniqueName": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\VisibilityRunner.csproj",
+        "projectName": "VisibilityRunner",
+        "projectPath": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\VisibilityRunner.csproj",
         "packagesPath": "C:\\Users\\harri\\.nuget\\packages\\",
         "outputPath": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\obj\\",
         "projectStyle": "PackageReference",
@@ -53,7 +53,7 @@
         }
       },
       "runtimes": {
-        "win-x64": {
+        "win-x86": {
           "#import": []
         }
       }

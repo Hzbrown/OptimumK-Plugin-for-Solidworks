@@ -1,5 +1,5 @@
 is_global = true
-build_property.RootNamespace = sw_drawer
+build_property.RootNamespace = VisibilityRunner
 build_property.ProjectDir = C:\Users\harri\OptimumK Plugin for Solidworks\sw_drawer\
 build_property.EnableComHosting = 
 build_property.EnableGeneratedComInterfaceComImportInterop = 

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net48</TargetFramework>
-    <AssemblyName>CoordinateRunner</AssemblyName>
+    <AssemblyName>SuspensionTools</AssemblyName>
     <LangVersion>7.3</LangVersion>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <StartupObject>sw_drawer.Program</StartupObject>
@@ -20,6 +20,10 @@
     <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (3)\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (3)\api\redist</SolidWorksApiPath>
     <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files\SolidWorks Corp\SolidWorks\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files\SolidWorks Corp\SolidWorks\api\redist</SolidWorksApiPath>
     <SolidWorksApiPath Condition="'$(SolidWorksApiPath)' == '' And Exists('C:\Program Files (x86)\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll')">C:\Program Files (x86)\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksApiPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <StartupObject>sw_drawer.Program</StartupObject>
   </PropertyGroup>
 
   <Target Name="CheckSolidWorksPath" BeforeTargets="ResolveAssemblyReferences">
