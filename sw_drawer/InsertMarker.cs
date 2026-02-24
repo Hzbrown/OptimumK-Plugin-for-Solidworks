@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using SolidWorks.Interop.sldworks;
@@ -8,105 +9,85 @@ namespace sw_drawer
 {
     public class InsertMarker
     {
-        // Predefined colors for different groups (RGB values 0-255)
-        // Matches the actual OptimumK naming conventions
-        private static readonly int[,] GroupColors = new int[,]
+        // Color mapping based on name prefixes (RGB values 0-255)
+        private static readonly Dictionary<string, int[]> ColorMap = new Dictionary<string, int[]>
         {
-            { 255, 0, 0 },      // Red - Chassis (CHAS)
-            { 0, 255, 0 },      // Green - Upright (UPRI)
-            { 0, 0, 255 },      // Blue - Rocker (ROCK)
-            { 255, 255, 0 },    // Yellow - Steering/Tierod (STEE/TIE)
-            { 255, 0, 255 },    // Magenta - Wheel
-            { 0, 255, 255 },    // Cyan - Damper (DAMP)
-            { 255, 128, 0 },    // Orange - ARB
-            { 128, 0, 255 },    // Purple - Pushrod (PUSH)
-            { 128, 128, 128 }   // Gray - Other
+            { "CHAS_", new[] { 255, 0, 0 } },       // Red - Chassis
+            { "UPRI_", new[] { 0, 0, 255 } },       // Blue - Upright
+            { "ROCK_", new[] { 0, 128, 255 } },     // Light Blue - Rocker
+            { "NSMA_", new[] { 255, 192, 203 } },   // Pink - Non-Sprung Mass
+            { "PUSH_", new[] { 0, 255, 0 } },       // Green - Pushrod
+            { "TIER_", new[] { 255, 165, 0 } },     // Orange - Tie Rod
+            { "DAMP_", new[] { 128, 0, 128 } },     // Purple - Damper
+            { "ARBA_", new[] { 255, 255, 0 } },     // Yellow - ARB
+            { "_FRONT", new[] { 0, 200, 200 } },    // Cyan - Front (fallback)
+            { "_REAR", new[] { 200, 100, 0 } },     // Brown - Rear (fallback)
+            { "wheel", new[] { 64, 64, 64 } },      // Dark Gray - Wheels
         };
 
-        // Group names matching actual OptimumK JSON naming
-        private static readonly string[] GroupNames = new string[]
-        {
-            "Chassis",      // _Chassis suffix
-            "Upright",      // _Upright suffix  
-            "Rocker",       // _Rocker suffix
-            "Steering",     // Tierod_, Steering
-            "Wheel",        // _wheel suffix
-            "Damper",       // Damper_
-            "ARB",          // ARB_
-            "Pushrod",      // Pushrod_
-            "Other"         // Anything else
-        };
+        private static readonly int[] DefaultColor = new[] { 128, 128, 128 }; // Gray default
 
-        public static int GetGroupIndex(string featureName)
+        public static bool Run(string[] args)
         {
-            string upper = featureName.ToUpperInvariant();
-            
-            // Match based on actual OptimumK naming conventions from JSON
-            // Chassis points (suffix _Chassis or _CHAS)
-            if (upper.Contains("_CHASSIS") || upper.Contains("_CHAS") || upper.Contains("CHASSIS_"))
-                return 0;
-            
-            // Upright points (suffix _Upright or _UPRI)
-            if (upper.Contains("_UPRIGHT") || upper.Contains("_UPRI") || upper.Contains("UPRIGHT_"))
-                return 1;
-            
-            // Rocker points (suffix _Rocker or _ROCK)
-            if (upper.Contains("_ROCKER") || upper.Contains("_ROCK") || upper.Contains("ROCKER_"))
-                return 2;
-            
-            // Steering/Tierod points
-            if (upper.Contains("TIEROD") || upper.Contains("TIE_ROD") || upper.Contains("STEERING") || upper.Contains("_STEE"))
-                return 3;
-            
-            // Wheel coordinate systems
-            if (upper.Contains("_WHEEL") || upper.Contains("WHEEL_"))
-                return 4;
-            
-            // Damper points
-            if (upper.Contains("DAMPER") || upper.Contains("_DAMP") || upper.Contains("SHOCK"))
-                return 5;
-            
-            // ARB points
-            if (upper.Contains("ARB") || upper.Contains("ANTIROLL") || upper.Contains("SWAY"))
-                return 6;
-            
-            // Pushrod points
-            if (upper.Contains("PUSHROD") || upper.Contains("_PUSH") || upper.Contains("PUSH_"))
-                return 7;
-            
-            return 8; // Other
-        }
-
-        /// <summary>
-        /// Gets a feature by name from the model by iterating through all features.
-        /// </summary>
-        private static Feature GetFeatureByName(ModelDoc2 swModel, string featureName)
-        {
-            Feature swFeature = (Feature)swModel.FirstFeature();
-            while (swFeature != null)
+            if (args.Length < 2)
             {
-                if (swFeature.Name == featureName)
-                {
-                    return swFeature;
-                }
-                swFeature = (Feature)swFeature.GetNextFeature();
+                PrintUsage();
+                return false;
             }
-            return null;
+
+            string subCommand = args[1].ToLowerInvariant();
+
+            switch (subCommand)
+            {
+                case "createall":
+                    double radius = args.Length > 2 ? double.Parse(args[2]) : 5.0;
+                    string markerPath = args.Length > 3 ? args[3] : FindMarkerPath();
+                    return CreateAllMarkers(radius, markerPath);
+
+                case "deleteall":
+                    return DeleteAllMarkers();
+
+                case "vis":
+                    if (args.Length < 4)
+                    {
+                        Console.WriteLine("Usage: marker vis <all|front|rear|name> <show|hide> [filter]");
+                        return false;
+                    }
+                    string target = args[2].ToLowerInvariant();
+                    bool visible = args[3].ToLowerInvariant() == "show";
+                    string filter = args.Length > 4 ? args[4] : null;
+                    return SetMarkerVisibility(target, visible, filter);
+
+                default:
+                    Console.WriteLine($"Unknown marker command: {subCommand}");
+                    PrintUsage();
+                    return false;
+            }
         }
 
-        /// <summary>
-        /// Gets the path to the Marker.STEP file.
-        /// </summary>
-        private static string GetMarkerStepPath()
+        private static void PrintUsage()
         {
-            // Look for Marker.STEP in the sw_drawer directory or parent directory
-            string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-            string[] searchPaths = new string[]
+            Console.WriteLine("Usage: SuspensionTools.exe marker <command> [args]");
+            Console.WriteLine("Commands:");
+            Console.WriteLine("  createall <radius_mm> [marker_path]  - Create markers at all coordinate systems");
+            Console.WriteLine("  deleteall                            - Delete all marker components");
+            Console.WriteLine("  vis <all|front|rear|name> <show|hide> [filter]");
+        }
+
+        private static string FindMarkerPath()
+        {
+            // Look for Marker.sldprt in common locations (check both cases)
+            string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            string[] searchPaths = new[]
             {
-                Path.Combine(exeDir, "Marker.STEP"),
-                Path.Combine(exeDir, "..", "..", "..", "..", "Marker.STEP"),
-                Path.Combine(exeDir, "..", "..", "..", "..", "..", "Marker.STEP"),
-                Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments), "Marker.STEP")
+                Path.Combine(exeDir, "Marker.SLDPRT"),
+                Path.Combine(exeDir, "Marker.sldprt"),
+                Path.Combine(exeDir, "..", "..", "..", "Marker.SLDPRT"),
+                Path.Combine(exeDir, "..", "..", "..", "Marker.sldprt"),
+                Path.Combine(exeDir, "..", "..", "..", "..", "Marker.SLDPRT"),
+                Path.Combine(exeDir, "..", "..", "..", "..", "Marker.sldprt"),
+                @"C:\Users\harri\OptimumK Plugin for Solidworks\Marker.SLDPRT",
+                @"C:\Users\harri\OptimumK Plugin for Solidworks\Marker.sldprt",
             };
 
             foreach (string path in searchPaths)
@@ -114,58 +95,31 @@ namespace sw_drawer
                 string fullPath = Path.GetFullPath(path);
                 if (File.Exists(fullPath))
                 {
+                    Console.WriteLine($"Found Marker at: {fullPath}");
                     return fullPath;
                 }
             }
 
-            // Default location
-            return Path.Combine(Path.GetDirectoryName(exeDir.TrimEnd('\\')), "Marker.STEP");
+            throw new FileNotFoundException(
+                "Marker.SLDPRT not found. Please place it in the project folder or specify path.");
         }
 
-        public static bool Run(string[] args)
+        private static int[] GetColorForName(string name)
         {
-            if (args.Length < 2)
+            string upper = name.ToUpperInvariant();
+            foreach (var kvp in ColorMap)
             {
-                Console.WriteLine("Usage: SuspensionTools.exe marker <create|vis> <args...>");
-                Console.WriteLine("  marker create <name> <radius_mm>");
-                Console.WriteLine("  marker createall <radius_mm>");
-                Console.WriteLine("  marker deleteall");
-                Console.WriteLine("  marker vis <all|group|name|front|rear> <show|hide> [param]");
-                return false;
+                if (upper.Contains(kvp.Key.ToUpperInvariant()))
+                {
+                    return kvp.Value;
+                }
             }
-
-            string subCommand = args[1].ToLower();
-
-            if (subCommand == "create" && args.Length >= 4)
-            {
-                string csName = args[2];
-                double scale = double.Parse(args[3]) / 5.0; // Scale factor based on 5mm default
-                return CreateMarkerAtCoordSystem(csName, scale);
-            }
-            else if (subCommand == "vis" && args.Length >= 4)
-            {
-                string target = args[2].ToLower();
-                bool visible = args[3].ToLower() == "show";
-                string param = args.Length > 4 ? args[4] : null;
-                return SetMarkerVisibility(target, visible, param);
-            }
-            else if (subCommand == "createall" && args.Length >= 3)
-            {
-                double scale = double.Parse(args[2]) / 5.0;
-                return CreateAllMarkers(scale);
-            }
-            else if (subCommand == "deleteall")
-            {
-                return DeleteAllMarkers();
-            }
-
-            Console.WriteLine("Invalid marker command");
-            return false;
+            return DefaultColor;
         }
 
-        private static bool CreateMarkerAtCoordSystem(string csName, double scale)
+        private static bool CreateAllMarkers(double radiusMm, string markerPath)
         {
-            SldWorks swApp = null;
+            SldWorks swApp;
             try
             {
                 swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
@@ -183,404 +137,408 @@ namespace sw_drawer
                 return false;
             }
 
-            if (swModel.GetType() != (int)swDocumentTypes_e.swDocPART)
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
             {
-                Console.WriteLine("Error: Active document must be a part");
+                Console.WriteLine("Error: Active document must be an assembly");
                 return false;
             }
 
-            PartDoc swPart = (PartDoc)swModel;
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+            string assyTitle = swModel.GetTitle();
+            string assyPath = swModel.GetPathName();
+
+            // Check if assembly is read-only or has other issues
+            Console.WriteLine($"Assembly: {assyTitle}");
+            Console.WriteLine($"Assembly Path: {assyPath}");
+            Console.WriteLine($"Read-only: {swModel.IsOpenedReadOnly()}");
+            Console.WriteLine($"View-only: {swModel.IsOpenedViewOnly()}");
+
+            // Resolve to absolute path
+            markerPath = Path.GetFullPath(markerPath);
             
-            // Find the coordinate system
-            Feature csFeature = GetFeatureByName(swModel, csName);
-            if (csFeature == null)
+            // Verify marker file exists
+            if (!File.Exists(markerPath))
             {
-                Console.WriteLine($"Error: Coordinate system '{csName}' not found");
+                Console.WriteLine($"Error: Marker file not found at {markerPath}");
                 return false;
             }
-
-            // Get coordinate system transform
-            CoordinateSystemFeatureData csData = (CoordinateSystemFeatureData)csFeature.GetDefinition();
-            MathTransform csTransform = csData.Transform;
-            double[] transformData = (double[])csTransform.ArrayData;
             
-            // Extract origin (positions are at indices 9, 10, 11)
-            double x = transformData[9];
-            double y = transformData[10];
-            double z = transformData[11];
+            Console.WriteLine($"Using marker file: {markerPath}");
 
-            string markerName = csName + "_Marker";
-            
-            // Check if marker already exists
-            Feature existingMarker = GetFeatureByName(swModel, markerName);
+            // Close marker if it's already open (from previous run)
+            ModelDoc2 existingMarker = swApp.GetOpenDocumentByName(markerPath) as ModelDoc2;
             if (existingMarker != null)
             {
-                Console.WriteLine($"Marker '{markerName}' already exists, skipping");
+                Console.WriteLine("Closing previously opened Marker document...");
+                swApp.CloseDoc(existingMarker.GetTitle());
+            }
+
+            // IMPORTANT: Pre-load the marker document into memory
+            int openErrors = 0;
+            int openWarnings = 0;
+            Console.WriteLine("Pre-loading Marker document...");
+            ModelDoc2 markerDoc = swApp.OpenDoc6(
+                markerPath,
+                (int)swDocumentTypes_e.swDocPART,
+                (int)swOpenDocOptions_e.swOpenDocOptions_Silent,
+                "",
+                ref openErrors,
+                ref openWarnings
+            );
+
+            if (markerDoc == null)
+            {
+                Console.WriteLine($"Error: Could not open Marker document (errors={openErrors}, warnings={openWarnings})");
+                return false;
+            }
+            Console.WriteLine($"Marker document loaded: {markerDoc.GetTitle()}");
+
+            // Re-activate the assembly
+            int activateErrors = 0;
+            swApp.ActivateDoc2(assyTitle, false, ref activateErrors);
+            swModel = (ModelDoc2)swApp.ActiveDoc;
+            swAssy = (AssemblyDoc)swModel;
+
+            // Find all coordinate systems in the assembly
+            List<CoordSystemInfo> coordSystems = GetAllCoordinateSystems(swModel);
+            Console.WriteLine($"Found {coordSystems.Count} coordinate systems");
+
+            if (coordSystems.Count == 0)
+            {
+                Console.WriteLine("No coordinate systems found to mark");
+                swApp.CloseDoc(markerDoc.GetTitle());
                 return true;
             }
 
-            // Import STEP file as marker
-            bool success = ImportMarkerStep(swApp, swModel, swPart, markerName, x, y, z, scale, csName);
-            
-            if (success)
-            {
-                MoveToMarkersFolder(swModel, markerName);
-                Console.WriteLine($"Created marker: {markerName} at ({x * 1000:F1}, {y * 1000:F1}, {z * 1000:F1}) mm");
-            }
-            
-            return success;
-        }
-
-        private static bool ImportMarkerStep(SldWorks swApp, ModelDoc2 swModel, PartDoc swPart,
-            string markerName, double x, double y, double z, double scale, string csName)
-        {
-            try
-            {
-                // Create sphere body using IModeler (matching VBA example from codestack.net)
-                Modeler modeler = (Modeler)swApp.GetModeler();
-                if (modeler == null)
-                {
-                    Console.WriteLine($"Error: Could not get Modeler for {markerName}");
-                    return CreateSketchPointMarker(swModel, markerName, x, y, z, csName);
-                }
-
-                // Radius based on scale (5mm default * scale factor)
-                double radius = 0.005 * scale; // 5mm in meters * scale
-                
-                Console.WriteLine($"Creating sphere at ({x*1000:F1}, {y*1000:F1}, {z*1000:F1}) mm, radius={radius*1000:F1}mm");
-                
-                // Create sphere center point and axis arrays (matching VBA)
-                double[] dCenter = new double[] { x, y, z };
-                double[] dAxis = new double[] { 0, 0, 1 };
-                double[] dRef = new double[] { 1, 0, 0 };
-
-                // Create spherical surface
-                Surface swSurf = (Surface)modeler.CreateSphericalSurface2(dCenter, dAxis, dRef, radius);
-                
-                if (swSurf == null)
-                {
-                    Console.WriteLine($"Error: CreateSphericalSurface2 returned null for {markerName}");
-                    return CreateSketchPointMarker(swModel, markerName, x, y, z, csName);
-                }
-                
-                Console.WriteLine($"Spherical surface created for {markerName}");
-
-                // Create full sphere - pass null for UV bounds to get full sphere
-                // In VBA this is "Empty", in C# we pass null
-                Body2 swBody = (Body2)swSurf.CreateTrimmedSheet4(null, true);
-                
-                if (swBody == null)
-                {
-                    Console.WriteLine($"Error: CreateTrimmedSheet4 returned null for {markerName}");
-                    
-                    // Try alternative: create with explicit UV range for full sphere
-                    // U: 0 to 2*PI, V: -PI/2 to PI/2
-                    double[] uvRange = new double[] { 0, 2 * Math.PI, -Math.PI / 2, Math.PI / 2 };
-                    swBody = (Body2)swSurf.CreateTrimmedSheet4(uvRange, true);
-                    
-                    if (swBody == null)
-                    {
-                        Console.WriteLine($"Error: CreateTrimmedSheet4 with UV range also failed for {markerName}");
-                        return CreateSketchPointMarker(swModel, markerName, x, y, z, csName);
-                    }
-                }
-                
-                Console.WriteLine($"Sheet body created for {markerName}, type={swBody.GetType()}");
-
-                // Set color on body BEFORE adding to part
-                SetMarkerColorOnBody(swBody, csName);
-
-                // Add the body to the part as a feature
-                Feature feat = (Feature)swPart.CreateFeatureFromBody3(
-                    swBody, 
-                    false, 
-                    (int)swCreateFeatureBodyOpts_e.swCreateFeatureBodyCheck
-                );
-
-                if (feat != null)
-                {
-                    feat.Name = markerName;
-                    Console.WriteLine($"Feature created: {markerName}");
-                    return true;
-                }
-                else
-                {
-                    // Try with different options
-                    Console.WriteLine($"CreateFeatureFromBody3 with Check failed, trying Simplify...");
-                    feat = (Feature)swPart.CreateFeatureFromBody3(
-                        swBody, 
-                        false, 
-                        (int)swCreateFeatureBodyOpts_e.swCreateFeatureBodySimplify
-                    );
-                    
-                    if (feat != null)
-                    {
-                        feat.Name = markerName;
-                        Console.WriteLine($"Feature created with Simplify: {markerName}");
-                        return true;
-                    }
-                    
-                    Console.WriteLine($"Error: CreateFeatureFromBody3 failed for {markerName}");
-                    return CreateSketchPointMarker(swModel, markerName, x, y, z, csName);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Exception creating marker {markerName}: {ex.Message}");
-                Console.WriteLine($"Stack trace: {ex.StackTrace}");
-                return CreateSketchPointMarker(swModel, markerName, x, y, z, csName);
-            }
-        }
-
-        /// <summary>
-        /// Sets color directly on a body object.
-        /// </summary>
-        private static void SetMarkerColorOnBody(Body2 body, string csName)
-        {
-            if (body == null) return;
-            
-            int groupIdx = GetGroupIndex(csName);
-            int red = GroupColors[groupIdx, 0];
-            int green = GroupColors[groupIdx, 1];
-            int blue = GroupColors[groupIdx, 2];
-            
-            try
-            {
-                double[] matProps = new double[9];
-                matProps[0] = red / 255.0;
-                matProps[1] = green / 255.0;
-                matProps[2] = blue / 255.0;
-                matProps[3] = 1.0;   // Ambient
-                matProps[4] = 1.0;   // Diffuse
-                matProps[5] = 0.2;   // Specular
-                matProps[6] = 0.3;   // Shininess
-                matProps[7] = 0.0;   // Transparency
-                matProps[8] = 0.0;   // Emission
-                
-                body.MaterialPropertyValues2 = matProps;
-            }
-            catch { }
-        }
-
-        private static bool CreateSketchPointMarker(ModelDoc2 swModel, string markerName, double x, double y, double z, string csName)
-        {
-            // Fallback: create a 3D sketch with a point as the marker
+            // Force the doc into a "safe to modify" state before insertion
+            swApp.CommandInProgress = true;
             swModel.ClearSelection2(true);
-            swModel.SketchManager.Insert3DSketch(true);
-            swModel.SketchManager.CreatePoint(x, y, z);
-            swModel.SketchManager.Insert3DSketch(true);
             
-            Feature sketchFeat = (Feature)swModel.Extension.GetLastFeatureAdded();
-            if (sketchFeat != null)
-            {
-                sketchFeat.Name = markerName;
-                MoveToMarkersFolder(swModel, markerName);
-                Console.WriteLine($"Created sketch point marker: {markerName}");
-                return true;
-            }
-            return false;
-        }
-
-        private static int Get3DSketchCount(ModelDoc2 swModel)
-        {
-            int count = 0;
-            Feature feat = (Feature)swModel.FirstFeature();
-            while (feat != null)
-            {
-                if (feat.GetTypeName2() == "3DProfileFeature")
-                    count++;
-                feat = (Feature)feat.GetNextFeature();
-            }
-            return count;
-        }
-
-        private static void EnsureMarkersFolder(ModelDoc2 swModel)
-        {
-            Feature folder = GetFeatureByName(swModel, "Markers");
-            if (folder == null)
-            {
-                swModel.FeatureManager.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_EmptyBefore);
-                Feature newFolder = (Feature)swModel.Extension.GetLastFeatureAdded();
-                if (newFolder != null)
-                {
-                    newFolder.Name = "Markers";
-                }
-            }
-        }
-
-        /// <summary>
-        /// Moves a feature into the "Markers" folder, creating the folder if it doesn't exist.
-        /// </summary>
-        private static void MoveToMarkersFolder(ModelDoc2 swModel, string featureName)
-        {
-            const string folderName = "Markers";
-            FeatureManager featMgr = swModel.FeatureManager;
-
-            Feature feat = GetFeatureByName(swModel, featureName);
-            if (feat == null) return;
-
-            // Try to find existing "Markers" folder
-            Feature folder = null;
-            Feature swFeat = (Feature)swModel.FirstFeature();
+            // Ensure we're editing the assembly, not a component
+            swAssy.EditAssembly();
             
-            while (swFeat != null)
-            {
-                if (swFeat.GetTypeName2() == "FtrFolder" && swFeat.Name == folderName)
-                {
-                    folder = swFeat;
-                    break;
-                }
-                swFeat = (Feature)swFeat.GetNextFeature();
-            }
+            // Force rebuild to ensure clean state
+            swModel.ForceRebuild3(false);
 
-            // Create folder if it doesn't exist
-            if (folder == null)
-            {
-                feat.Select2(false, 0);
-                folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
-                
-                if (folder != null)
-                {
-                    folder.Name = folderName;
-                }
-                swModel.ClearSelection2(true);
-            }
-            else
-            {
-                feat.Select2(false, 0);
-                swModel.Extension.ReorderFeature(feat.Name, folder.Name, (int)swMoveLocation_e.swMoveToFolder);
-                swModel.ClearSelection2(true);
-            }
-        }
-
-        private static void SetMarkerColor(ModelDoc2 swModel, PartDoc swPart, string markerName, string csName, Body2 body = null)
-        {
-            int groupIdx = GetGroupIndex(csName);
-            int red = GroupColors[groupIdx, 0];
-            int green = GroupColors[groupIdx, 1];
-            int blue = GroupColors[groupIdx, 2];
+            // Store inserted components for post-processing
+            List<Component2> insertedComponents = new List<Component2>();
+            List<string> componentNames = new List<string>();
             
-            // Find body by feature name
-            object[] bodies = (object[])swPart.GetBodies2((int)swBodyType_e.swAllBodies, true);
-            if (bodies != null)
+            int created = 0;
+            int skipped = 0;
+
+            foreach (var csInfo in coordSystems)
             {
-                foreach (Body2 bodyItem in bodies)
+                string markerName = csInfo.Name + "_Marker";
+
+                // Check if marker already exists
+                if (ComponentExists(swAssy, markerName))
                 {
-                    if (bodyItem != null && bodyItem.Name != null && bodyItem.Name.Contains(markerName))
+                    Console.WriteLine($"Skipping {csInfo.Name} - marker already exists");
+                    skipped++;
+                    continue;
+                }
+
+                try
+                {
+                    Console.WriteLine($"Creating marker for: {csInfo.Name} at ({csInfo.X*1000:F1}, {csInfo.Y*1000:F1}, {csInfo.Z*1000:F1}) mm");
+
+                    // Re-activate the assembly before each insert
+                    int errors = 0;
+                    swApp.ActivateDoc2(assyTitle, false, ref errors);
+                    
+                    // Refresh swModel and swAssy references
+                    swModel = (ModelDoc2)swApp.ActiveDoc;
+                    swAssy = (AssemblyDoc)swModel;
+                    
+                    // Ensure we're not editing a component
+                    swAssy.EditAssembly();
+                    swModel.ClearSelection2(true);
+
+                    // Try AddComponent4 instead of AddComponent5
+                    // AddComponent4 signature: (PathName, ConfigName, X, Y, Z)
+                    Component2 newComp = (Component2)swAssy.AddComponent4(
+                        markerPath,
+                        "",          // configuration name (blank = default)
+                        csInfo.X,
+                        csInfo.Y,
+                        csInfo.Z
+                    );
+
+                    if (newComp == null)
                     {
-                        try
-                        {
-                            double[] matProps = new double[9];
-                            matProps[0] = red / 255.0;
-                            matProps[1] = green / 255.0;
-                            matProps[2] = blue / 255.0;
-                            matProps[3] = 1.0;
-                            matProps[4] = 1.0;
-                            matProps[5] = 0.2;
-                            matProps[6] = 0.3;
-                            matProps[7] = 0.0;
-                            matProps[8] = 0.0;
-                            
-                            bodyItem.MaterialPropertyValues2 = matProps;
-                            break;
-                        }
-                        catch { }
+                        // Try alternative: AddComponent5 with explicit options
+                        Console.WriteLine($"  AddComponent4 failed, trying AddComponent5...");
+                        newComp = swAssy.AddComponent5(
+                            markerPath,
+                            (int)swAddComponentConfigOptions_e.swAddComponentConfigOptions_CurrentSelectedConfig,
+                            "",          // configuration name
+                            false,       // suppress
+                            "",          // component name
+                            csInfo.X,
+                            csInfo.Y,
+                            csInfo.Z
+                        );
                     }
+
+                    if (newComp == null)
+                    {
+                        // Last resort: try AddComponent2
+                        Console.WriteLine($"  AddComponent5 failed, trying AddComponent2...");
+                        newComp = (Component2)swAssy.AddComponent2(
+                            markerPath,
+                            csInfo.X,
+                            csInfo.Y,
+                            csInfo.Z
+                        );
+                    }
+
+                    if (newComp == null)
+                    {
+                        Console.WriteLine($"  All AddComponent methods failed for {csInfo.Name}");
+                        Console.WriteLine($"  Check: Is the assembly saved? Is it read-only? Is a sketch or feature being edited?");
+                        continue;
+                    }
+
+                    Console.WriteLine($"  Component inserted: {newComp.Name2}");
+                    
+                    // Store for later processing
+                    insertedComponents.Add(newComp);
+                    componentNames.Add(markerName);
+
+                    // Apply color immediately
+                    ApplyColorToComponent(newComp, csInfo.Name);
+
+                    created++;
                 }
-            }
-        }
-
-        private static bool CreateAllMarkers(double scale)
-        {
-            SldWorks swApp = null;
-            try
-            {
-                swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
-            }
-            catch
-            {
-                Console.WriteLine("Error: SolidWorks is not running");
-                return false;
-            }
-
-            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
-            if (swModel == null)
-            {
-                Console.WriteLine("Error: No active document");
-                return false;
-            }
-
-            if (swModel.GetType() != (int)swDocumentTypes_e.swDocPART)
-            {
-                Console.WriteLine("Error: Active document must be a part");
-                return false;
-            }
-
-            PartDoc swPart = (PartDoc)swModel;
-            
-            // Collect all coordinate system features first
-            System.Collections.Generic.List<Feature> coordSystems = new System.Collections.Generic.List<Feature>();
-            Feature feat = (Feature)swModel.FirstFeature();
-            while (feat != null)
-            {
-                if (feat.GetTypeName2() == "CoordSys" && feat.Name != "Origin")
+                catch (Exception ex)
                 {
-                    coordSystems.Add(feat);
+                    Console.WriteLine($"  Error creating marker for {csInfo.Name}: {ex.Message}");
+                    Console.WriteLine($"  Stack trace: {ex.StackTrace}");
                 }
-                feat = (Feature)feat.GetNextFeature();
             }
 
-            int count = 0;
-            foreach (Feature csFeat in coordSystems)
+            // Restore command state
+            swApp.CommandInProgress = false;
+
+            // Post-process: make virtual and rename
+            Console.WriteLine($"\nProcessing {insertedComponents.Count} components...");
+            for (int i = 0; i < insertedComponents.Count; i++)
             {
-                string csName = csFeat.Name;
-                Feature existingMarker = GetFeatureByName(swModel, csName + "_Marker");
-                if (existingMarker == null)
+                Component2 comp = insertedComponents[i];
+                string newName = componentNames[i];
+                
+                try
                 {
-                    if (CreateMarkerFromFeature(swApp, swModel, swPart, csFeat, scale))
-                        count++;
+                    // Make virtual
+                    bool madeVirtual = comp.MakeVirtual2(false);
+                    if (madeVirtual)
+                    {
+                        Console.WriteLine($"  Made virtual: {comp.Name2}");
+                    }
+                    
+                    // Rename
+                    comp.Name2 = newName;
+                    Console.WriteLine($"  Renamed to: {newName}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  Warning processing {comp.Name2}: {ex.Message}");
                 }
             }
 
-            Console.WriteLine($"Created {count} markers");
+            // Close the marker document
+            Console.WriteLine("Closing Marker document...");
+            swApp.ActivateDoc2(assyTitle, false, ref activateErrors);
+            swApp.CloseDoc(markerDoc.GetTitle());
+
+            swModel = (ModelDoc2)swApp.ActiveDoc;
             swModel.EditRebuild3();
+            Console.WriteLine($"\nCreated {created} markers, skipped {skipped} existing");
             return true;
         }
 
-        private static bool CreateMarkerFromFeature(SldWorks swApp, ModelDoc2 swModel, PartDoc swPart, Feature csFeature, double scale)
+        private static List<CoordSystemInfo> GetAllCoordinateSystems(ModelDoc2 swModel)
         {
-            string csName = csFeature.Name;
-            string markerName = csName + "_Marker";
+            var coordSystems = new List<CoordSystemInfo>();
 
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "CoordSys")
+                {
+                    try
+                    {
+                        CoordinateSystemFeatureData csData = (CoordinateSystemFeatureData)feat.GetDefinition();
+                        if (csData != null)
+                        {
+                            // Access selection needed to get transform
+                            bool accessOk = csData.AccessSelections(swModel, null);
+                            
+                            MathTransform transform = csData.Transform;
+                            if (transform != null)
+                            {
+                                double[] td = (double[])transform.ArrayData;
+                                // ArrayData: [0-8] rotation matrix, [9-11] translation (meters)
+                                coordSystems.Add(new CoordSystemInfo
+                                {
+                                    Name = feat.Name,
+                                    Feature = feat,
+                                    X = td[9],
+                                    Y = td[10],
+                                    Z = td[11]
+                                });
+                            }
+                            
+                            csData.ReleaseSelectionAccess();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Warning: Could not get data for {feat.Name}: {ex.Message}");
+                    }
+                }
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            return coordSystems;
+        }
+
+        private static bool ComponentExists(AssemblyDoc swAssy, string componentName)
+        {
+            object[] components = (object[])swAssy.GetComponents(false);
+            if (components == null) return false;
+
+            foreach (object obj in components)
+            {
+                Component2 comp = (Component2)obj;
+                if (comp.Name2.Contains(componentName))
+                    return true;
+            }
+            return false;
+        }
+
+        private static void ApplyColorToComponent(Component2 comp, string csName)
+        {
             try
             {
-                CoordinateSystemFeatureData csData = (CoordinateSystemFeatureData)csFeature.GetDefinition();
-                MathTransform csTransform = csData.Transform;
-                double[] transformData = (double[])csTransform.ArrayData;
+                int[] rgb = GetColorForName(csName);
+                double[] matProps = new double[9];
+                matProps[0] = rgb[0] / 255.0;  // R
+                matProps[1] = rgb[1] / 255.0;  // G
+                matProps[2] = rgb[2] / 255.0;  // B
+                matProps[3] = 1.0;             // Ambient
+                matProps[4] = 1.0;             // Diffuse
+                matProps[5] = 0.2;             // Specular
+                matProps[6] = 0.3;             // Shininess
+                matProps[7] = 0.0;             // Transparency
+                matProps[8] = 0.0;             // Emission
 
-                double x = transformData[9];
-                double y = transformData[10];
-                double z = transformData[11];
-
-                bool success = ImportMarkerStep(swApp, swModel, swPart, markerName, x, y, z, scale, csName);
-                
-                if (success)
-                {
-                    MoveToMarkersFolder(swModel, markerName);
-                }
-                
-                return success;
+                comp.MaterialPropertyValues = matProps;
+                Console.WriteLine($"  Applied color RGB({rgb[0]},{rgb[1]},{rgb[2]})");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error creating marker {markerName}: {ex.Message}");
-                return false;
+                Console.WriteLine($"  Warning: Could not set color: {ex.Message}");
+            }
+        }
+
+        private static void AddMateToCoordSystem(SldWorks swApp, ModelDoc2 swModel, AssemblyDoc swAssy,
+            Component2 markerComp, CoordSystemInfo csInfo)
+        {
+            try
+            {
+                swModel.ClearSelection2(true);
+
+                // Get the origin point of the marker component
+                ModelDoc2 markerDoc = (ModelDoc2)markerComp.GetModelDoc2();
+                if (markerDoc == null)
+                {
+                    Console.WriteLine("  Warning: Could not access marker model for mating");
+                    return;
+                }
+
+                // Select the coordinate system's origin entity
+                // The coordinate system feature has an OriginEntity we can use for mating
+                CoordinateSystemFeatureData csData = (CoordinateSystemFeatureData)csInfo.Feature.GetDefinition();
+                object originEntity = csData.OriginEntity;
+
+                if (originEntity == null)
+                {
+                    Console.WriteLine("  Warning: Could not get origin entity from coordinate system");
+                    // Fall back to just positioning (already done during insert)
+                    return;
+                }
+
+                // Select the coordinate system origin entity
+                SelectionMgr selMgr = (SelectionMgr)swModel.SelectionManager;
+                
+                // Select coord system origin (mark 1)
+                SelectData selData1 = (SelectData)selMgr.CreateSelectData();
+                selData1.Mark = 1;
+                
+                bool sel1 = swModel.Extension.SelectByID2(
+                    csInfo.Name, "COORDSYS", 0, 0, 0, false, 1, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (!sel1)
+                {
+                    Console.WriteLine($"  Warning: Could not select coordinate system {csInfo.Name}");
+                    return;
+                }
+
+                // Select marker component origin (mark 2) 
+                string markerOriginName = markerComp.Name2 + "@" + swModel.GetTitle().Replace(".SLDASM", "") + "/Origin";
+                bool sel2 = swModel.Extension.SelectByID2(
+                    "Point1@Origin@" + markerComp.Name2 + "@" + swModel.GetTitle(),
+                    "EXTSKETCHPOINT", 0, 0, 0, true, 2, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (!sel2)
+                {
+                    // Try alternate selection for origin
+                    sel2 = swModel.Extension.SelectByID2(
+                        "Origin@" + markerComp.Name2 + "@" + swModel.GetTitle(),
+                        "ORIGINFOLDER", 0, 0, 0, true, 2, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                }
+
+                if (sel1)
+                {
+                    // Add coincident mate
+                    int mateError = 0;
+                    Mate2 mate = swAssy.AddMate5(
+                        (int)swMateType_e.swMateCOINCIDENT,
+                        (int)swMateAlign_e.swMateAlignALIGNED,
+                        false,  // Flip
+                        0, 0, 0, 0, 0, 0, 0, 0,  // Distances and angles (11 doubles total)
+                        false,  // ForPositioningOnly
+                        false,  // LockRotation
+                        (int)swMateWidthOptions_e.swMateWidth_Centered,  // WidthMateOption
+                        out mateError);
+
+                    if (mate != null && mateError == 0)
+                    {
+                        Console.WriteLine($"  Added mate to {csInfo.Name}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  Note: Component positioned at coordinate system (mate skipped, error: {mateError})");
+                    }
+                }
+
+                swModel.ClearSelection2(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  Note: Mate creation skipped: {ex.Message}");
+                swModel.ClearSelection2(true);
             }
         }
 
         private static bool DeleteAllMarkers()
         {
-            SldWorks swApp = null;
+            SldWorks swApp;
             try
             {
                 swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
@@ -598,38 +556,56 @@ namespace sw_drawer
                 return false;
             }
 
-            int count = 0;
-            Feature feat = (Feature)swModel.FirstFeature();
-            System.Collections.Generic.List<string> toDelete = new System.Collections.Generic.List<string>();
-            
-            while (feat != null)
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
             {
-                if (feat.Name.EndsWith("_Marker") || feat.Name.EndsWith("_Marker_Sketch"))
-                {
-                    toDelete.Add(feat.Name);
-                }
-                feat = (Feature)feat.GetNextFeature();
+                Console.WriteLine("Error: Active document must be an assembly");
+                return false;
             }
 
-            foreach (string name in toDelete)
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+
+            // Find all marker components
+            List<Component2> markersToDelete = new List<Component2>();
+            object[] components = (object[])swAssy.GetComponents(false);
+
+            if (components != null)
             {
-                Feature f = GetFeatureByName(swModel, name);
-                if (f != null)
+                foreach (object obj in components)
+                {
+                    Component2 comp = (Component2)obj;
+                    if (comp.Name2.Contains("_Marker"))
+                    {
+                        markersToDelete.Add(comp);
+                    }
+                }
+            }
+
+            Console.WriteLine($"Found {markersToDelete.Count} markers to delete");
+
+            int deleted = 0;
+            foreach (Component2 comp in markersToDelete)
+            {
+                try
                 {
                     swModel.ClearSelection2(true);
-                    f.Select2(false, 0);
+                    comp.Select4(false, null, false);
                     swModel.EditDelete();
-                    count++;
+                    deleted++;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Could not delete {comp.Name2}: {ex.Message}");
                 }
             }
 
-            Console.WriteLine($"Deleted {count} markers");
+            swModel.EditRebuild3();
+            Console.WriteLine($"Deleted {deleted} markers");
             return true;
         }
 
-        private static bool SetMarkerVisibility(string target, bool visible, string param)
+        private static bool SetMarkerVisibility(string target, bool visible, string filter)
         {
-            SldWorks swApp = null;
+            SldWorks swApp;
             try
             {
                 swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
@@ -647,60 +623,75 @@ namespace sw_drawer
                 return false;
             }
 
-            int count = 0;
-            Feature feat = (Feature)swModel.FirstFeature();
-            
-            while (feat != null)
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
             {
-                bool shouldModify = false;
-                string featName = feat.Name;
-                
-                if (featName.EndsWith("_Marker") || featName.EndsWith("_Marker_Sketch"))
-                {
-                    string baseName = featName.Replace("_Marker_Sketch", "").Replace("_Marker", "");
-                    
-                    switch (target)
-                    {
-                        case "all":
-                            shouldModify = true;
-                            break;
-                        case "group":
-                            if (param != null)
-                            {
-                                int targetGroup = Array.FindIndex(GroupNames, g => 
-                                    g.Equals(param, StringComparison.OrdinalIgnoreCase));
-                                shouldModify = (targetGroup >= 0 && GetGroupIndex(baseName) == targetGroup);
-                            }
-                            break;
-                        case "name":
-                            shouldModify = param != null && baseName.IndexOf(param, StringComparison.OrdinalIgnoreCase) >= 0;
-                            break;
-                        case "front":
-                            shouldModify = baseName.ToUpperInvariant().Contains("_FRONT") || 
-                                          baseName.StartsWith("F") && (baseName.Contains("L_") || baseName.Contains("R_"));
-                            break;
-                        case "rear":
-                            shouldModify = baseName.ToUpperInvariant().Contains("_REAR") ||
-                                          (baseName.StartsWith("R") && !baseName.Contains("Rocker") && (baseName.Contains("L_") || baseName.Contains("R_")));
-                            break;
-                    }
-                }
-                
-                if (shouldModify)
-                {
-                    feat.SetSuppression2(
-                        visible ? (int)swFeatureSuppressionAction_e.swUnSuppressFeature 
-                                : (int)swFeatureSuppressionAction_e.swSuppressFeature,
-                        (int)swInConfigurationOpts_e.swThisConfiguration, null);
-                    count++;
-                }
-                
-                feat = (Feature)feat.GetNextFeature();
+                Console.WriteLine("Error: Active document must be an assembly");
+                return false;
             }
 
-            string action = visible ? "shown" : "hidden";
-            Console.WriteLine($"{count} markers {action}");
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+            object[] components = (object[])swAssy.GetComponents(false);
+
+            if (components == null)
+            {
+                Console.WriteLine("No components in assembly");
+                return true;
+            }
+
+            int count = 0;
+            foreach (object obj in components)
+            {
+                Component2 comp = (Component2)obj;
+                string compName = comp.Name2;
+
+                if (!compName.Contains("_Marker")) continue;
+
+                bool shouldModify = false;
+                string baseName = compName.Replace("_Marker", "").Split('-')[0];
+
+                switch (target)
+                {
+                    case "all":
+                        shouldModify = true;
+                        break;
+                    case "front":
+                        shouldModify = baseName.ToUpperInvariant().Contains("FRONT");
+                        break;
+                    case "rear":
+                        shouldModify = baseName.ToUpperInvariant().Contains("REAR");
+                        break;
+                    case "name":
+                        shouldModify = filter != null &&
+                            baseName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+                        break;
+                }
+
+                if (shouldModify)
+                {
+                    try
+                    {
+                        int suppState = visible
+                            ? (int)swComponentSuppressionState_e.swComponentResolved
+                            : (int)swComponentSuppressionState_e.swComponentSuppressed;
+
+                        comp.SetSuppression2(suppState);
+                        count++;
+                    }
+                    catch { }
+                }
+            }
+
+            Console.WriteLine($"{count} markers {(visible ? "shown" : "hidden")}");
             return true;
+        }
+
+        private class CoordSystemInfo
+        {
+            public string Name { get; set; }
+            public Feature Feature { get; set; }
+            public double X { get; set; }
+            public double Y { get; set; }
+            public double Z { get; set; }
         }
     }
 }

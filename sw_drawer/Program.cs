@@ -1,11 +1,13 @@
 using System;
 using System.Runtime.InteropServices;
 using SolidWorks.Interop.sldworks;
+using SolidWorks.Interop.swconst;
 
 namespace sw_drawer
 {
     class Program
     {
+        [STAThread]
         static int Main(string[] args)
         {
             if (args.Length == 0)
@@ -14,207 +16,39 @@ namespace sw_drawer
                 return 1;
             }
 
-            string command = args[0].ToLower();
+            string command = args[0].ToLowerInvariant();
 
-            // Handle marker commands
-            if (command == "marker")
+            try
             {
-                return InsertMarker.Run(args) ? 0 : 1;
-            }
+                bool success = false;
 
-            // Route to appropriate handler
-            if (command == "coord" || command == "coordinate")
-            {
-                return HandleCoordinate(args);
-            }
-            else if (command == "vis" || command == "visibility")
-            {
-                return HandleVisibility(args);
-            }
-            else
-            {
-                // Legacy support: if first arg looks like a coordinate name, treat as coordinate command
-                if (args.Length >= 4 && double.TryParse(args[1], out _))
+                switch (command)
                 {
-                    return HandleCoordinateLegacy(args);
-                }
-                
-                Console.WriteLine($"Unknown command: {command}");
-                PrintUsage();
-                return 1;
-            }
-        }
-
-        static int HandleCoordinate(string[] args)
-        {
-            // coord <name> <x> <y> <z> [angleX] [angleY] [angleZ]
-            if (args.Length < 5)
-            {
-                Console.WriteLine("Usage: SuspensionTools coord <name> <x> <y> <z> [angleX] [angleY] [angleZ]");
-                return 1;
-            }
-
-            string name = args[1];
-            double x = double.Parse(args[2]);
-            double y = double.Parse(args[3]);
-            double z = double.Parse(args[4]);
-            double angleX = args.Length > 5 ? double.Parse(args[5]) : 0;
-            double angleY = args.Length > 6 ? double.Parse(args[6]) : 0;
-            double angleZ = args.Length > 7 ? double.Parse(args[7]) : 0;
-
-            return ExecuteWithSolidWorks(swApp => 
-                InsertCoordinate.InsertCoordinateSystem(swApp, name, x, y, z, angleX, angleY, angleZ) ? 0 : 1);
-        }
-
-        static int HandleCoordinateLegacy(string[] args)
-        {
-            // Legacy: <name> <x> <y> <z> [angleX] [angleY] [angleZ]
-            string name = args[0];
-            double x = double.Parse(args[1]);
-            double y = double.Parse(args[2]);
-            double z = double.Parse(args[3]);
-            double angleX = args.Length > 4 ? double.Parse(args[4]) : 0;
-            double angleY = args.Length > 5 ? double.Parse(args[5]) : 0;
-            double angleZ = args.Length > 6 ? double.Parse(args[6]) : 0;
-
-            return ExecuteWithSolidWorks(swApp => 
-                InsertCoordinate.InsertCoordinateSystem(swApp, name, x, y, z, angleX, angleY, angleZ) ? 0 : 1);
-        }
-
-        static int HandleVisibility(string[] args)
-        {
-            // vis <subcommand> <show|hide> [parameter]
-            if (args.Length < 3)
-            {
-                Console.WriteLine("Usage: SuspensionTools vis <subcommand> <show|hide> [parameter]");
-                PrintVisibilityCommands();
-                return 1;
-            }
-
-            string subCommand = args[1].ToLower();
-            string visibleArg = args[2].ToLower();
-            bool visible = visibleArg == "true" || visibleArg == "1" || visibleArg == "show";
-
-            return ExecuteWithSolidWorks(swApp =>
-            {
-                int result = 0;
-
-                switch (subCommand)
-                {
-                    case "feature":
-                        if (args.Length < 4)
-                        {
-                            Console.WriteLine("Error: Feature name required.");
-                            return 1;
-                        }
-                        bool success = FeatureVisibility.SetFeatureVisibility(swApp, args[3], visible);
-                        result = success ? 1 : 0;
+                    case "marker":
+                        success = InsertMarker.Run(args);
                         break;
 
-                    case "suffix":
-                        if (args.Length < 4)
-                        {
-                            Console.WriteLine("Error: Suffix required.");
-                            return 1;
-                        }
-                        result = FeatureVisibility.SetFeatureVisibilityBySuffix(swApp, args[3], visible);
-                        break;
-
-                    case "substring":
-                        if (args.Length < 4)
-                        {
-                            Console.WriteLine("Error: Substring required.");
-                            return 1;
-                        }
-                        result = FeatureVisibility.SetFeatureVisibilityBySubstring(swApp, args[3], visible);
-                        break;
-
-                    case "front":
-                        result = FeatureVisibility.SetFeatureVisibilityBySuffix(swApp, "_FRONT", visible);
-                        result += FeatureVisibility.SetWheelVisibility(swApp, visible, frontOnly: true);
-                        break;
-
-                    case "rear":
-                        result = FeatureVisibility.SetFeatureVisibilityBySuffix(swApp, "_REAR", visible);
-                        result += FeatureVisibility.SetWheelVisibility(swApp, visible, rearOnly: true);
-                        break;
-
-                    case "wheels":
-                        result = FeatureVisibility.SetWheelVisibility(swApp, visible);
-                        break;
-
-                    case "frontwheels":
-                        result = FeatureVisibility.SetWheelVisibility(swApp, visible, frontOnly: true);
-                        break;
-
-                    case "rearwheels":
-                        result = FeatureVisibility.SetWheelVisibility(swApp, visible, rearOnly: true);
-                        break;
-
-                    case "chassis":
-                        result = FeatureVisibility.SetFeatureVisibilityBySubstring(swApp, "CHAS", visible);
-                        break;
-
-                    case "nonchassis":
-                        result = SetNonChassisVisibility(swApp, visible);
-                        break;
-
-                    case "all":
-                        result = FeatureVisibility.SetFeatureVisibilityBySuffix(swApp, "_FRONT", visible);
-                        result += FeatureVisibility.SetFeatureVisibilityBySuffix(swApp, "_REAR", visible);
-                        result += FeatureVisibility.SetWheelVisibility(swApp, visible);
+                    case "vis":
+                        success = RunVisibilityCommand(args);
                         break;
 
                     default:
-                        Console.WriteLine($"Unknown visibility command: {subCommand}");
-                        PrintVisibilityCommands();
-                        return 1;
+                        // Legacy: treat as coordinate system insertion
+                        // Args: <name> <x> <y> <z> [rx] [ry] [rz]
+                        if (args.Length >= 4)
+                        {
+                            success = InsertCoordinateSystem(args);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Unknown command: {command}");
+                            PrintUsage();
+                            return 1;
+                        }
+                        break;
                 }
 
-                Console.WriteLine($"Total features modified: {result}");
-                return result > 0 ? 0 : 1;
-            });
-        }
-
-        static int SetNonChassisVisibility(SldWorks swApp, bool visible)
-        {
-            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
-            if (swModel == null) return 0;
-
-            int count = 0;
-            Feature swFeature = (Feature)swModel.FirstFeature();
-
-            while (swFeature != null)
-            {
-                string name = swFeature.Name;
-                bool isSuspensionPoint = name.EndsWith("_FRONT") || name.EndsWith("_REAR") || name.Contains("_wheel");
-                bool isChassisPoint = name.IndexOf("CHAS", StringComparison.OrdinalIgnoreCase) >= 0;
-
-                if (isSuspensionPoint && !isChassisPoint)
-                {
-                    if (FeatureVisibility.SetFeatureVisibility(swApp, name, visible))
-                    {
-                        count++;
-                    }
-                }
-                swFeature = (Feature)swFeature.GetNextFeature();
-            }
-
-            Console.WriteLine($"{(visible ? "Shown" : "Hidden")} {count} non-chassis features.");
-            return count;
-        }
-
-        static int ExecuteWithSolidWorks(Func<SldWorks, int> action)
-        {
-            try
-            {
-                SldWorks swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
-                if (swApp == null)
-                {
-                    Console.WriteLine("Error: Could not connect to SolidWorks. Make sure it is running.");
-                    return 1;
-                }
-                return action(swApp);
+                return success ? 0 : 1;
             }
             catch (Exception ex)
             {
@@ -225,36 +59,157 @@ namespace sw_drawer
 
         static void PrintUsage()
         {
-            Console.WriteLine("SuspensionTools - SolidWorks Suspension Geometry Tool");
+            Console.WriteLine("SuspensionTools.exe - SolidWorks Suspension Utilities");
             Console.WriteLine();
             Console.WriteLine("Usage:");
-            Console.WriteLine("  SuspensionTools coord <name> <x> <y> <z> [angleX] [angleY] [angleZ]");
-            Console.WriteLine("  SuspensionTools vis <command> <show|hide> [parameter]");
-            Console.WriteLine();
-            Console.WriteLine("Legacy (backward compatible):");
-            Console.WriteLine("  SuspensionTools <name> <x> <y> <z> [angleX] [angleY] [angleZ]");
-            Console.WriteLine();
-            PrintVisibilityCommands();
-            Console.WriteLine("  marker create <csname> <radius_mm>  - Create marker at coordinate system");
-            Console.WriteLine("  marker createall <radius_mm>        - Create markers at all coordinate systems");
-            Console.WriteLine("  marker deleteall                    - Delete all markers");
-            Console.WriteLine("  marker vis <all|group|front|rear|name> <show|hide> [param]");
+            Console.WriteLine("  SuspensionTools.exe <name> <x> <y> <z> [rx] [ry] [rz]  - Insert coordinate system");
+            Console.WriteLine("  SuspensionTools.exe marker <command> [args]            - Marker operations");
+            Console.WriteLine("  SuspensionTools.exe vis <command> [args]               - Visibility control");
         }
 
-        static void PrintVisibilityCommands()
+        static bool InsertCoordinateSystem(string[] args)
         {
-            Console.WriteLine("Visibility Commands:");
-            Console.WriteLine("  feature <show|hide> <name>     - Show/hide a specific feature");
-            Console.WriteLine("  suffix <show|hide> <suffix>    - Show/hide features by suffix");
-            Console.WriteLine("  substring <show|hide> <text>   - Show/hide features containing text");
-            Console.WriteLine("  front <show|hide>              - Show/hide all front suspension");
-            Console.WriteLine("  rear <show|hide>               - Show/hide all rear suspension");
-            Console.WriteLine("  wheels <show|hide>             - Show/hide all wheels");
-            Console.WriteLine("  frontwheels <show|hide>        - Show/hide front wheels only");
-            Console.WriteLine("  rearwheels <show|hide>         - Show/hide rear wheels only");
-            Console.WriteLine("  chassis <show|hide>            - Show/hide chassis points");
-            Console.WriteLine("  nonchassis <show|hide>         - Show/hide non-chassis points");
-            Console.WriteLine("  all <show|hide>                - Show/hide all suspension features");
+            string name = args[0];
+            double x = double.Parse(args[1]) / 1000.0;  // mm to meters
+            double y = double.Parse(args[2]) / 1000.0;
+            double z = double.Parse(args[3]) / 1000.0;
+
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null) { Console.WriteLine("Error: No active document"); return false; }
+
+            // Create a 3D sketch point at the location, then use it for the coordinate system
+            SketchManager sketchMgr = swModel.SketchManager;
+            FeatureManager featMgr = swModel.FeatureManager;
+
+            // Insert 3D sketch
+            swModel.ClearSelection2(true);
+            sketchMgr.Insert3DSketch(true);
+            
+            // Create point at location
+            SketchPoint skPt = sketchMgr.CreatePoint(x, y, z);
+            
+            // Exit sketch
+            sketchMgr.Insert3DSketch(true);
+            
+            // Get the sketch feature and rename it
+            Feature sketchFeat = (Feature)swModel.FeatureByPositionReverse(0);
+            string sketchName = name + "_RefSketch";
+            if (sketchFeat != null)
+            {
+                sketchFeat.Name = sketchName;
+            }
+
+            // Select the point for coordinate system creation
+            swModel.ClearSelection2(true);
+            
+            // Select the sketch point as origin
+            bool selected = swModel.Extension.SelectByID2(
+                "Point1@" + sketchName, "EXTSKETCHPOINT", x, y, z, false, 1, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+
+            if (!selected)
+            {
+                // Try selecting by coordinates
+                selected = swModel.Extension.SelectByID2(
+                    "", "EXTSKETCHPOINT", x, y, z, false, 1, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+            }
+
+            // Create coordinate system
+            Feature csFeat = featMgr.InsertCoordinateSystem(false, false, false);
+            
+            if (csFeat != null)
+            {
+                csFeat.Name = name;
+                Console.WriteLine($"Created: {name} at ({x*1000:F1}, {y*1000:F1}, {z*1000:F1}) mm");
+                swModel.ClearSelection2(true);
+                return true;
+            }
+            
+            Console.WriteLine($"Failed to create: {name}");
+            swModel.ClearSelection2(true);
+            return false;
+        }
+
+        static bool RunVisibilityCommand(string[] args)
+        {
+            if (args.Length < 3)
+            {
+                Console.WriteLine("Usage: vis <all|front|rear|substring> <show|hide> [param]");
+                return false;
+            }
+
+            string target = args[1].ToLowerInvariant();
+            bool visible = args[2].ToLowerInvariant() == "show";
+            string param = args.Length > 3 ? args[3] : null;
+
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null) { Console.WriteLine("Error: No active document"); return false; }
+
+            int count = 0;
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                string name = feat.Name;
+                bool shouldModify = false;
+
+                switch (target)
+                {
+                    case "all":
+                        shouldModify = name.Contains("_FRONT") || name.Contains("_REAR") || name.Contains("_wheel");
+                        break;
+                    case "front":
+                        shouldModify = name.Contains("_FRONT") || name.StartsWith("FL_") || name.StartsWith("FR_");
+                        break;
+                    case "rear":
+                        shouldModify = name.Contains("_REAR") || name.StartsWith("RL_") || name.StartsWith("RR_");
+                        break;
+                    case "wheels":
+                        shouldModify = name.Contains("_wheel");
+                        break;
+                    case "frontwheels":
+                        shouldModify = name.StartsWith("FL_") || name.StartsWith("FR_");
+                        break;
+                    case "rearwheels":
+                        shouldModify = name.StartsWith("RL_") || name.StartsWith("RR_");
+                        break;
+                    case "chassis":
+                        shouldModify = name.Contains("CHAS_");
+                        break;
+                    case "nonchassis":
+                        shouldModify = (name.Contains("_FRONT") || name.Contains("_REAR")) && !name.Contains("CHAS_");
+                        break;
+                    case "substring":
+                        shouldModify = param != null && name.IndexOf(param, StringComparison.OrdinalIgnoreCase) >= 0;
+                        break;
+                }
+
+                if (shouldModify && feat.GetTypeName2() == "CoordSys")
+                {
+                    try
+                    {
+                        feat.SetSuppression2(
+                            visible ? (int)swFeatureSuppressionAction_e.swUnSuppressFeature
+                                    : (int)swFeatureSuppressionAction_e.swSuppressFeature,
+                            (int)swInConfigurationOpts_e.swThisConfiguration, null);
+                        count++;
+                    }
+                    catch { }
+                }
+
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            Console.WriteLine($"{count} features {(visible ? "shown" : "hidden")}");
+            return true;
         }
     }
 }
