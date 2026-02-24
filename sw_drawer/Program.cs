@@ -8,13 +8,19 @@ namespace sw_drawer
     {
         static int Main(string[] args)
         {
-            if (args.Length < 1)
+            if (args.Length == 0)
             {
                 PrintUsage();
                 return 1;
             }
 
             string command = args[0].ToLower();
+
+            // Handle marker commands
+            if (command == "marker")
+            {
+                return InsertMarker.Run(args) ? 0 : 1;
+            }
 
             // Route to appropriate handler
             if (command == "coord" || command == "coordinate")
@@ -229,6 +235,10 @@ namespace sw_drawer
             Console.WriteLine("  SuspensionTools <name> <x> <y> <z> [angleX] [angleY] [angleZ]");
             Console.WriteLine();
             PrintVisibilityCommands();
+            Console.WriteLine("  marker create <csname> <radius_mm>  - Create marker at coordinate system");
+            Console.WriteLine("  marker createall <radius_mm>        - Create markers at all coordinate systems");
+            Console.WriteLine("  marker deleteall                    - Delete all markers");
+            Console.WriteLine("  marker vis <all|group|front|rear|name> <show|hide> [param]");
         }
 
         static void PrintVisibilityCommands()

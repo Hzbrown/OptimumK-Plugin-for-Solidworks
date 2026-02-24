@@ -113,6 +113,10 @@ namespace sw_drawer
             }
 
             newFeat.Name = name;
+
+            // Move to "Coordinates" folder (create if doesn't exist)
+            MoveToCoordinatesFolder(swDoc, newFeat);
+
             swDoc.EditRebuild3();
 
             Console.WriteLine(useRotation
@@ -120,6 +124,50 @@ namespace sw_drawer
                 : $"Created: '{name}' at ({x}, {y}, {z}) mm.");
 
             return true;
+        }
+
+        /// <summary>
+        /// Moves a feature into the "Coordinates" folder, creating the folder if it doesn't exist.
+        /// </summary>
+        private static void MoveToCoordinatesFolder(ModelDoc2 swDoc, Feature feat)
+        {
+            const string folderName = "Coordinates";
+            FeatureManager featMgr = swDoc.FeatureManager;
+
+            // Try to find existing "Coordinates" folder
+            Feature folder = null;
+            Feature swFeat = (Feature)swDoc.FirstFeature();
+            
+            while (swFeat != null)
+            {
+                if (swFeat.GetTypeName2() == "FtrFolder" && swFeat.Name == folderName)
+                {
+                    folder = swFeat;
+                    break;
+                }
+                swFeat = (Feature)swFeat.GetNextFeature();
+            }
+
+            // Create folder if it doesn't exist
+            if (folder == null)
+            {
+                // Select the feature to create folder from it
+                feat.Select2(false, 0);
+                folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                
+                if (folder != null)
+                {
+                    folder.Name = folderName;
+                }
+                swDoc.ClearSelection2(true);
+            }
+            else
+            {
+                // Move feature into existing folder
+                feat.Select2(false, 0);
+                swDoc.Extension.ReorderFeature(feat.Name, folder.Name, (int)swMoveLocation_e.swMoveToFolder);
+                swDoc.ClearSelection2(true);
+            }
         }
     }
 }
