@@ -118,7 +118,7 @@ def draw_rear_suspension(rear_suspension_path: str, vehicle_setup_path: str, pro
     rear_data = load_json(rear_suspension_path)
     vehicle_data = load_json(vehicle_setup_path)
     
-    reference_distance = float(vehicle_data.get("Reference distance", 0.0))
+    reference_distance = -float(vehicle_data.get("Reference distance", 0.0))
     total = count_hardpoints(rear_data) + count_wheels(rear_data.get("Wheels", {}))
     
     print("=== Inserting Rear Hardpoints ===")
@@ -206,6 +206,145 @@ def set_visibility_by_substring(substring: str, visible: bool) -> bool:
     """Show or hide features containing a specific substring."""
     return _run_visibility_command("substring", visible, substring)
 
+
+# ==================== Marker Control Functions ====================
+
+def _run_marker_command(*args) -> bool:
+    """Run SuspensionTools.exe marker command via subprocess."""
+    if not os.path.exists(TOOLS_EXE):
+        raise FileNotFoundError(f"SuspensionTools.exe not found at {TOOLS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
+    
+    cmd_args = [TOOLS_EXE, "marker"] + list(args)
+    result = subprocess.run(cmd_args, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip())
+    return result.returncode == 0
+
+
+def create_all_markers(radius_mm: float = 5.0) -> bool:
+    """Create marker spheres at all coordinate systems."""
+    return _run_marker_command("createall", str(radius_mm))
+
+
+def delete_all_markers() -> bool:
+    """Delete all marker features."""
+    return _run_marker_command("deleteall")
+
+
+def set_all_markers_visibility(visible: bool) -> bool:
+    """Show or hide all markers."""
+    return _run_marker_command("vis", "all", "show" if visible else "hide")
+
+
+def set_front_markers_visibility(visible: bool) -> bool:
+    """Show or hide front suspension markers."""
+    return _run_marker_command("vis", "front", "show" if visible else "hide")
+
+
+def set_rear_markers_visibility(visible: bool) -> bool:
+    """Show or hide rear suspension markers."""
+    return _run_marker_command("vis", "rear", "show" if visible else "hide")
+
+
+def set_marker_group_visibility(group: str, visible: bool) -> bool:
+    """Show or hide markers by component group (Chassis, Upright, Rocker, etc.)."""
+    return _run_marker_command("vis", "group", "show" if visible else "hide", group)
+
+
+def set_marker_visibility_by_name(substring: str, visible: bool) -> bool:
+    """Show or hide markers containing a specific substring in their name."""
+    return _run_marker_command("vis", "name", "show" if visible else "hide", substring)
+
+
+def _get_suspension_tools_exe():
+    """Get the path to SuspensionTools.exe"""
+    import os
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Check multiple possible locations
+    paths_to_check = [
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net6.0", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net6.0", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net8.0", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net8.0", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "SuspensionTools.exe"),
+    ]
+    
+    for path in paths_to_check:
+        if os.path.exists(path):
+            return path
+    
+    raise FileNotFoundError(
+        "SuspensionTools.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"
+        f"Searched in: {paths_to_check[0]}"
+    )
+
+
+def create_all_markers_with_worker(radius_mm, worker=None):
+    """Create all markers with abort support via worker."""
+    exe_path = _get_suspension_tools_exe()
+    args = [exe_path, "marker", "createall", str(radius_mm)]
+    
+    print(f"Running: {' '.join(args)}")
+    
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+    
+    # Store process in worker for abort capability
+    if worker:
+        worker._process = process
+    
+    # Stream output line by line
+    for line in process.stdout:
+        if worker and worker._abort:
+            process.terminate()
+            print("Operation aborted by user")
+            return False
+        print(line.rstrip())
+    
+    process.wait()
+    return process.returncode == 0
+
+
+def delete_all_markers_with_worker(worker=None):
+    """Delete all markers with abort support via worker."""
+    exe_path = _get_suspension_tools_exe()
+    args = [exe_path, "marker", "deleteall"]
+    
+    print(f"Running: {' '.join(args)}")
+    
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+    
+    # Store process in worker for abort capability
+    if worker:
+        worker._process = process
+    
+    # Stream output line by line
+    for line in process.stdout:
+        if worker and worker._abort:
+            process.terminate()
+            print("Operation aborted by user")
+            return False
+        print(line.rstrip())
+    
+    process.wait()
+    return process.returncode == 0
 
 if __name__ == "__main__":
     results_dir = os.path.join(SCRIPT_DIR, "results", "Final EV2024")

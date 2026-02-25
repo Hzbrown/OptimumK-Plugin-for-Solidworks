@@ -2,10 +2,11 @@ import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
-                             QProgressBar, QGroupBox, QGridLayout, QCheckBox)
+                             QProgressBar, QGroupBox, QGridLayout, QCheckBox, QLineEdit, QSpinBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 import json
+import subprocess
 
 sys.path.insert(0, os.path.dirname(__file__))
 from draw_suspension import (draw_full_suspension, draw_front_suspension, draw_rear_suspension,
@@ -14,7 +15,12 @@ from draw_suspension import (draw_full_suspension, draw_front_suspension, draw_r
                               set_all_wheels_visibility, set_front_wheels_visibility,
                               set_rear_wheels_visibility, set_chassis_points_visibility,
                               set_non_chassis_visibility, set_all_suspension_visibility,
-                              set_visibility_by_substring)
+                              set_visibility_by_substring,
+                              create_all_markers, delete_all_markers,
+                              create_all_markers_with_worker, delete_all_markers_with_worker,
+                              set_all_markers_visibility, set_front_markers_visibility,
+                              set_rear_markers_visibility, set_marker_group_visibility,
+                              set_marker_visibility_by_name)
 from optimumSheetParser import OptimumSheetParser
 from test_solidworks_connection import get_active_document_name
 
@@ -59,6 +65,97 @@ class SolidWorksWorker(QThread):
             self.finished.emit(False, str(e))
         finally:
             sys.stdout = old_stdout
+
+
+class MarkerWorker(QThread):
+    """Worker thread for marker operations."""
+    finished = pyqtSignal(bool, str)
+    progress = pyqtSignal(int, int)  # current, total
+    state_changed = pyqtSignal(str)  # state description
+    log = pyqtSignal(str)
+
+    def __init__(self, operation, *args):
+        super().__init__()
+        self.operation = operation
+        self.args = args
+        self._abort = False
+        self._process = None
+        self._total_tasks = 0
+        self._current_progress = 0
+
+    def abort(self):
+        """Request abort and terminate any running subprocess."""
+        self._abort = True
+        if self._process and self._process.poll() is None:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except:
+                try:
+                    self._process.kill()
+                except:
+                    pass
+
+    def parse_output_line(self, line):
+        """Parse special output lines for progress and state."""
+        if line.startswith("TOTAL:"):
+            try:
+                new_total = int(line.split(":")[1])
+                # Always update to the latest total (may be refined during execution)
+                self._total_tasks = new_total
+                # Emit progress with updated total, keeping current progress
+                self.progress.emit(self._current_progress, self._total_tasks)
+            except:
+                pass
+            return None  # Don't show in log
+        elif line.startswith("PROGRESS:"):
+            try:
+                self._current_progress = int(line.split(":")[1])
+                self.progress.emit(self._current_progress, self._total_tasks)
+            except:
+                pass
+            return None  # Don't show in log
+        elif line.startswith("STATE:"):
+            state = line.split(":")[1]
+            state_descriptions = {
+                "Initializing": "Starting...",
+                "LoadingMarker": "Reading marker file...",
+                "ScanningCoordSystems": "Scanning coordinate systems...",
+                "InsertingComponents": "Inserting markers...",
+                "MatingMarkers": "Mating markers...",
+                "PostProcessing": "Post-processing markers...",
+                "Cleanup": "Cleaning up...",
+                "Complete": "Done"
+            }
+            description = state_descriptions.get(state, state)
+            self.state_changed.emit(description)
+            return None  # Don't show in log
+        return line  # Normal log line
+
+    def run(self):
+        stream = QtStream()
+        stream.text_written.connect(self._handle_log)
+        old_stdout = sys.stdout
+        sys.stdout = stream
+        try:
+            result = self.operation(*self.args, worker=self)
+            if self._abort:
+                self.finished.emit(False, "Operation aborted")
+            else:
+                self.finished.emit(True, "Operation completed successfully")
+        except Exception as e:
+            if self._abort:
+                self.finished.emit(False, "Operation aborted")
+            else:
+                self.finished.emit(False, str(e))
+        finally:
+            sys.stdout = old_stdout
+
+    def _handle_log(self, text):
+        """Handle log output, parsing special lines."""
+        result = self.parse_output_line(text)
+        if result is not None:
+            self.log.emit(result)
 
 
 class ImportOptimumKTab(QWidget):
@@ -414,7 +511,6 @@ class ViewTab(QWidget):
         group_custom = QGroupBox("Custom Filter (by name substring)")
         h_custom = QHBoxLayout()
         
-        from PyQt5.QtWidgets import QLineEdit
         self.custom_filter = QLineEdit()
         self.custom_filter.setPlaceholderText("Enter text to match (e.g., 'Upright', 'Pushrod')")
         h_custom.addWidget(self.custom_filter)
@@ -487,6 +583,306 @@ class ViewTab(QWidget):
             self.status_text.append(f"✗ Error: {str(e)}")
 
 
+class MarkersTab(QWidget):
+    """Tab for creating and controlling visibility of marker spheres."""
+    
+    def __init__(self):
+        super().__init__()
+        self.worker = None
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout()
+        
+        # Title
+        layout.addWidget(QLabel("Marker Spheres - Visual indicators at hardpoints"))
+        
+        # State label
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        self.state_label.setVisible(False)
+        layout.addWidget(self.state_label)
+        
+        # Progress bar and abort button (hidden by default)
+        h_progress = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFormat("%v / %m (%p%)")
+        h_progress.addWidget(self.progress_bar)
+        
+        self.btn_abort = QPushButton("Abort")
+        self.btn_abort.setVisible(False)
+        self.btn_abort.setStyleSheet("background-color: #ff6666;")
+        self.btn_abort.clicked.connect(self.abort_operation)
+        h_progress.addWidget(self.btn_abort)
+        
+        layout.addLayout(h_progress)
+        
+        # Create/Delete section
+        group_create = QGroupBox("Create / Delete Markers")
+        h_create = QHBoxLayout()
+        
+        h_create.addWidget(QLabel("Size (mm):"))
+        
+        self.radius_spin = QSpinBox()
+        self.radius_spin.setRange(1, 50)
+        self.radius_spin.setValue(5)
+        h_create.addWidget(self.radius_spin)
+        
+        self.btn_create_all = QPushButton("Create All Markers")
+        self.btn_create_all.clicked.connect(self.create_all_markers)
+        h_create.addWidget(self.btn_create_all)
+        
+        self.btn_delete_all = QPushButton("Delete All Markers")
+        self.btn_delete_all.clicked.connect(self.delete_all_markers)
+        self.btn_delete_all.setStyleSheet("background-color: #ffcccc;")
+        h_create.addWidget(self.btn_delete_all)
+        
+        group_create.setLayout(h_create)
+        layout.addWidget(group_create)
+        
+        # Show/Hide All and Front/Rear
+        group_main = QGroupBox("All / Front / Rear")
+        grid_main = QGridLayout()
+        
+        btn_show_all = QPushButton("Show All")
+        btn_show_all.clicked.connect(lambda: self.set_visibility(set_all_markers_visibility, True, "all markers"))
+        grid_main.addWidget(btn_show_all, 0, 0)
+        
+        btn_hide_all = QPushButton("Hide All")
+        btn_hide_all.clicked.connect(lambda: self.set_visibility(set_all_markers_visibility, False, "all markers"))
+        grid_main.addWidget(btn_hide_all, 0, 1)
+        
+        btn_show_front = QPushButton("Show FRONT")
+        btn_show_front.clicked.connect(lambda: self.set_visibility(set_front_markers_visibility, True, "front markers"))
+        grid_main.addWidget(btn_show_front, 1, 0)
+        
+        btn_hide_front = QPushButton("Hide FRONT")
+        btn_hide_front.clicked.connect(lambda: self.set_visibility(set_front_markers_visibility, False, "front markers"))
+        grid_main.addWidget(btn_hide_front, 1, 1)
+        
+        btn_show_rear = QPushButton("Show REAR")
+        btn_show_rear.clicked.connect(lambda: self.set_visibility(set_rear_markers_visibility, True, "rear markers"))
+        grid_main.addWidget(btn_show_rear, 2, 0)
+        
+        btn_hide_rear = QPushButton("Hide REAR")
+        btn_hide_rear.clicked.connect(lambda: self.set_visibility(set_rear_markers_visibility, False, "rear markers"))
+        grid_main.addWidget(btn_hide_rear, 2, 1)
+        
+        group_main.setLayout(grid_main)
+        layout.addWidget(group_main)
+        
+        # Component Types - matching actual JSON naming patterns
+        group_types = QGroupBox("By Component Type (JSON prefixes)")
+        grid_types = QGridLayout()
+        
+        # Row 0: CHAS_ (Chassis) and UPRI_ (Upright)
+        btn_show_chas = QPushButton("Show CHAS_")
+        btn_show_chas.setStyleSheet("background-color: #FF0000; color: white;")
+        btn_show_chas.clicked.connect(lambda: self.set_name_visibility("CHAS_", True))
+        grid_types.addWidget(btn_show_chas, 0, 0)
+        
+        btn_hide_chas = QPushButton("Hide")
+        btn_hide_chas.clicked.connect(lambda: self.set_name_visibility("CHAS_", False))
+        grid_types.addWidget(btn_hide_chas, 0, 1)
+        
+        btn_show_upri = QPushButton("Show UPRI_")
+        btn_show_upri.setStyleSheet("background-color: #0000FF; color: white;")
+        btn_show_upri.clicked.connect(lambda: self.set_name_visibility("UPRI_", True))
+        grid_types.addWidget(btn_show_upri, 0, 2)
+        
+        btn_hide_upri = QPushButton("Hide")
+        btn_hide_upri.clicked.connect(lambda: self.set_name_visibility("UPRI_", False))
+        grid_types.addWidget(btn_hide_upri, 0, 3)
+        
+        # Row 1: ROCK_ (Rocker) and NSMA_ (Non-Sprung Mass)
+        btn_show_rock = QPushButton("Show ROCK_")
+        btn_show_rock.setStyleSheet("background-color: #0080FF; color: white;")
+        btn_show_rock.clicked.connect(lambda: self.set_name_visibility("ROCK_", True))
+        grid_types.addWidget(btn_show_rock, 1, 0)
+        
+        btn_hide_rock = QPushButton("Hide")
+        btn_hide_rock.clicked.connect(lambda: self.set_name_visibility("ROCK_", False))
+        grid_types.addWidget(btn_hide_rock, 1, 1)
+        
+        btn_show_nsma = QPushButton("Show NSMA_")
+        btn_show_nsma.setStyleSheet("background-color: #FFC0CB; color: black;")
+        btn_show_nsma.clicked.connect(lambda: self.set_name_visibility("NSMA_", True))
+        grid_types.addWidget(btn_show_nsma, 1, 2)
+        
+        btn_hide_nsma = QPushButton("Hide")
+        btn_hide_nsma.clicked.connect(lambda: self.set_name_visibility("NSMA_", False))
+        grid_types.addWidget(btn_hide_nsma, 1, 3)
+        
+        group_types.setLayout(grid_types)
+        layout.addWidget(group_types)
+        
+        # Custom filter
+        group_custom = QGroupBox("Custom Filter")
+        h_custom = QHBoxLayout()
+        
+        self.custom_filter = QLineEdit()
+        self.custom_filter.setPlaceholderText("Filter by name (e.g., 'Low', 'Upp', 'Piv')")
+        h_custom.addWidget(self.custom_filter)
+        
+        btn_show_custom = QPushButton("Show")
+        btn_show_custom.clicked.connect(self.show_custom)
+        h_custom.addWidget(btn_show_custom)
+        
+        btn_hide_custom = QPushButton("Hide")
+        btn_hide_custom.clicked.connect(self.hide_custom)
+        h_custom.addWidget(btn_hide_custom)
+        
+        group_custom.setLayout(h_custom)
+        layout.addWidget(group_custom)
+        
+        # Console output
+        layout.addWidget(QLabel("Output:"))
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
+        self.status_text.setFontFamily("Courier")
+        self.status_text.setMaximumHeight(120)
+        self.status_text.setText("Ready")
+        layout.addWidget(self.status_text)
+        
+        btn_clear = QPushButton("Clear Log")
+        btn_clear.clicked.connect(lambda: self.status_text.clear())
+        layout.addWidget(btn_clear)
+        
+        layout.addStretch()
+        self.setLayout(layout)
+    
+    def set_buttons_enabled(self, enabled):
+        """Enable or disable all action buttons."""
+        self.btn_create_all.setEnabled(enabled)
+        self.btn_delete_all.setEnabled(enabled)
+    
+    def on_progress(self, current, total):
+        """Update progress bar with current/total values like progressBar.setValue(i)."""
+        if total > 0:
+            # Set up determinate mode if not already set
+            if self.progress_bar.maximum() != total:
+                self.progress_bar.setRange(0, total)  # Like progressBar.setRange(0, steps)
+                self.progress_bar.setFormat("%v / %m (%p%)")  # Show "current / max (percentage%)"
+            
+            # Set current progress directly like progressBar.setValue(i)
+            self.progress_bar.setValue(current)
+        else:
+            # Keep indeterminate mode if total is 0 or unknown
+            if self.progress_bar.maximum() != 0:
+                self.progress_bar.setRange(0, 0)  # Indeterminate mode
+                self.progress_bar.setFormat("Working...")
+    
+    def on_state_changed(self, state_description):
+        """Update state label with current operation state."""
+        self.state_label.setText(state_description)
+        self.state_label.setVisible(True)
+    
+    def start_loading(self, message):
+        """Show progress bar and abort button in indeterminate mode initially."""
+        # Start in indeterminate mode (animated) like progressBar.setRange(0, 0)
+        self.progress_bar.setRange(0, 0)  # Indeterminate mode until we get TOTAL
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Starting...")  # Show status text initially
+        self.progress_bar.setVisible(True)
+        self.btn_abort.setVisible(True)
+        self.state_label.setText("Starting...")
+        self.state_label.setVisible(True)
+        self.set_buttons_enabled(False)
+        self.status_text.append(f"\n{message}")
+    
+    def stop_loading(self, success, message):
+        """Hide progress bar and abort button."""
+        self.progress_bar.setVisible(False)
+        self.btn_abort.setVisible(False)
+        self.state_label.setVisible(False)
+        self.set_buttons_enabled(True)
+        self.worker = None
+        if success:
+            self.status_text.append(f"✓ {message}")
+        else:
+            self.status_text.append(f"✗ {message}")
+    
+    def append_log(self, text):
+        """Append text to log."""
+        self.status_text.append(text)
+    
+    def abort_operation(self):
+        """Abort the current operation."""
+        if self.worker:
+            self.status_text.append("Aborting operation...")
+            self.worker.abort()
+    
+    def create_all_markers(self):
+        """Create markers at all coordinate systems using worker thread."""
+        radius = self.radius_spin.value()
+        self.start_loading(f"Creating markers (size: {radius}mm)...")
+        
+        self.worker = MarkerWorker(create_all_markers_with_worker, radius)
+        self.worker.log.connect(self.append_log)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.state_changed.connect(self.on_state_changed)
+        self.worker.finished.connect(self.stop_loading)
+        self.worker.start()
+    
+    def delete_all_markers(self):
+        """Delete all markers after confirmation."""
+        reply = QMessageBox.question(self, "Confirm", "Delete all markers?", 
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.start_loading("Deleting markers...")
+            
+            self.worker = MarkerWorker(delete_all_markers_with_worker)
+            self.worker.log.connect(self.append_log)
+            self.worker.progress.connect(self.on_progress)
+            self.worker.state_changed.connect(self.on_state_changed)
+            self.worker.finished.connect(self.stop_loading)
+            self.worker.start()
+
+    def set_visibility(self, func, visible, description):
+        """Execute a visibility function and update status."""
+        action = "Showing" if visible else "Hiding"
+        self.status_text.append(f"{action} {description}...")
+        try:
+            success = func(visible)
+            self.status_text.append("✓ Done" if success else "✗ Failed")
+        except FileNotFoundError:
+            self.status_text.append("✗ InsertMarker.exe not found. Build the project first.")
+            QMessageBox.critical(self, "Error", 
+                                 "InsertMarker.exe not found.\n\n"
+                                 "Run 'dotnet build -c Release' in the InsertMarker folder first.")
+        except Exception as e:
+            self.status_text.append(f"✗ {str(e)}")
+    
+    def set_name_visibility(self, substring, visible):
+        """Show/hide markers by name substring."""
+        action = "Showing" if visible else "Hiding"
+        self.status_text.append(f"{action} {substring} markers...")
+        try:
+            success = set_marker_visibility_by_name(substring, visible)
+            self.status_text.append("✓ Done" if success else "✗ Failed")
+        except FileNotFoundError:
+            self.status_text.append("✗ InsertMarker.exe not found. Build the project first.")
+        except Exception as e:
+            self.status_text.append(f"✗ {str(e)}")
+    
+    def show_custom(self):
+        """Show markers matching custom filter."""
+        text = self.custom_filter.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Enter filter text")
+            return
+        self.set_name_visibility(text, True)
+    
+    def hide_custom(self):
+        """Hide markers matching custom filter."""
+        text = self.custom_filter.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Enter filter text")
+            return
+        self.set_name_visibility(text, False)
+
+
 class HelpTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -511,13 +907,14 @@ class OptimumKApp(QMainWindow):
     
     def init_ui(self):
         self.setWindowTitle("OptimumK SolidWorks Plugin")
-        self.setGeometry(100, 100, 600, 600)
+        self.setGeometry(100, 100, 700, 700)
         
         tabs = QTabWidget()
         
         tabs.addTab(ImportOptimumKTab(), "Import OptimumK")
         tabs.addTab(WriteSolidworksTab(), "Write to SolidWorks")
         tabs.addTab(ViewTab(), "View")
+        tabs.addTab(MarkersTab(), "Markers")
         tabs.addTab(HelpTab(), "Help")
         
         self.setCentralWidget(tabs)
