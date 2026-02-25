@@ -7,6 +7,18 @@ using SolidWorks.Interop.swconst;
 
 namespace sw_drawer
 {
+    // State enum for progress reporting
+    public enum MarkerCreationState
+    {
+        Initializing,
+        LoadingMarker,
+        ScanningCoordSystems,
+        InsertingComponents,
+        PostProcessing,
+        Cleanup,
+        Complete
+    }
+
     public class InsertMarker
     {
         // Color mapping based on name prefixes (RGB values 0-255)
@@ -26,6 +38,7 @@ namespace sw_drawer
         };
 
         private static readonly int[] DefaultColor = new[] { 128, 128, 128 }; // Gray default
+
 
         public static bool Run(string[] args)
         {
@@ -119,6 +132,9 @@ namespace sw_drawer
 
         private static bool CreateAllMarkers(double radiusMm, string markerPath)
         {
+            // Report initial state
+            Console.WriteLine("STATE:Initializing");
+            
             SldWorks swApp;
             try
             {
@@ -147,25 +163,21 @@ namespace sw_drawer
             string assyTitle = swModel.GetTitle();
             string assyPath = swModel.GetPathName();
 
-            // Check if assembly is read-only or has other issues
             Console.WriteLine($"Assembly: {assyTitle}");
-            Console.WriteLine($"Assembly Path: {assyPath}");
-            Console.WriteLine($"Read-only: {swModel.IsOpenedReadOnly()}");
-            Console.WriteLine($"View-only: {swModel.IsOpenedViewOnly()}");
 
             // Resolve to absolute path
             markerPath = Path.GetFullPath(markerPath);
             
-            // Verify marker file exists
             if (!File.Exists(markerPath))
             {
                 Console.WriteLine($"Error: Marker file not found at {markerPath}");
                 return false;
             }
-            
+
+            // State: Loading marker document
+            Console.WriteLine("STATE:LoadingMarker");
             Console.WriteLine($"Using marker file: {markerPath}");
 
-            // Close marker if it's already open (from previous run)
             ModelDoc2 existingMarker = swApp.GetOpenDocumentByName(markerPath) as ModelDoc2;
             if (existingMarker != null)
             {
@@ -173,7 +185,6 @@ namespace sw_drawer
                 swApp.CloseDoc(existingMarker.GetTitle());
             }
 
-            // IMPORTANT: Pre-load the marker document into memory
             int openErrors = 0;
             int openWarnings = 0;
             Console.WriteLine("Pre-loading Marker document...");
@@ -193,73 +204,75 @@ namespace sw_drawer
             }
             Console.WriteLine($"Marker document loaded: {markerDoc.GetTitle()}");
 
-            // Re-activate the assembly
             int activateErrors = 0;
             swApp.ActivateDoc2(assyTitle, false, ref activateErrors);
             swModel = (ModelDoc2)swApp.ActiveDoc;
             swAssy = (AssemblyDoc)swModel;
 
-            // Find all coordinate systems in the assembly
+            // State: Scanning coordinate systems
+            Console.WriteLine("STATE:ScanningCoordSystems");
             List<CoordSystemInfo> coordSystems = GetAllCoordinateSystems(swModel);
-            Console.WriteLine($"Found {coordSystems.Count} coordinate systems");
-
-            if (coordSystems.Count == 0)
+            
+            // Filter out existing markers
+            List<CoordSystemInfo> coordSystemsToProcess = new List<CoordSystemInfo>();
+            int existingCount = 0;
+            foreach (var csInfo in coordSystems)
             {
-                Console.WriteLine("No coordinate systems found to mark");
+                string markerName = csInfo.Name + "_Marker";
+                if (ComponentExists(swAssy, markerName))
+                {
+                    existingCount++;
+                }
+                else
+                {
+                    coordSystemsToProcess.Add(csInfo);
+                }
+            }
+
+            int totalTasks = coordSystemsToProcess.Count * 2; // Insert + PostProcess for each
+            Console.WriteLine($"TOTAL:{totalTasks}");
+            Console.WriteLine($"Found {coordSystems.Count} coordinate systems ({existingCount} already have markers, {coordSystemsToProcess.Count} to create)");
+
+            if (coordSystemsToProcess.Count == 0)
+            {
+                Console.WriteLine("No new coordinate systems to mark");
                 swApp.CloseDoc(markerDoc.GetTitle());
+                Console.WriteLine("STATE:Complete");
                 return true;
             }
 
-            // Force the doc into a "safe to modify" state before insertion
             swApp.CommandInProgress = true;
             swModel.ClearSelection2(true);
-            
-            // Ensure we're editing the assembly, not a component
             swAssy.EditAssembly();
-            
-            // Force rebuild to ensure clean state
             swModel.ForceRebuild3(false);
 
-            // Store inserted components for post-processing
             List<Component2> insertedComponents = new List<Component2>();
             List<string> componentNames = new List<string>();
             
             int created = 0;
-            int skipped = 0;
+            int progressCount = 0;
 
-            foreach (var csInfo in coordSystems)
+            // State: Inserting components
+            Console.WriteLine("STATE:InsertingComponents");
+            
+            foreach (var csInfo in coordSystemsToProcess)
             {
                 string markerName = csInfo.Name + "_Marker";
-
-                // Check if marker already exists
-                if (ComponentExists(swAssy, markerName))
-                {
-                    Console.WriteLine($"Skipping {csInfo.Name} - marker already exists");
-                    skipped++;
-                    continue;
-                }
 
                 try
                 {
                     Console.WriteLine($"Creating marker for: {csInfo.Name} at ({csInfo.X*1000:F1}, {csInfo.Y*1000:F1}, {csInfo.Z*1000:F1}) mm");
 
-                    // Re-activate the assembly before each insert
                     int errors = 0;
                     swApp.ActivateDoc2(assyTitle, false, ref errors);
-                    
-                    // Refresh swModel and swAssy references
                     swModel = (ModelDoc2)swApp.ActiveDoc;
                     swAssy = (AssemblyDoc)swModel;
-                    
-                    // Ensure we're not editing a component
                     swAssy.EditAssembly();
                     swModel.ClearSelection2(true);
 
-                    // Try AddComponent4 instead of AddComponent5
-                    // AddComponent4 signature: (PathName, ConfigName, X, Y, Z)
                     Component2 newComp = (Component2)swAssy.AddComponent4(
                         markerPath,
-                        "",          // configuration name (blank = default)
+                        "",
                         csInfo.X,
                         csInfo.Y,
                         csInfo.Z
@@ -267,14 +280,13 @@ namespace sw_drawer
 
                     if (newComp == null)
                     {
-                        // Try alternative: AddComponent5 with explicit options
                         Console.WriteLine($"  AddComponent4 failed, trying AddComponent5...");
                         newComp = swAssy.AddComponent5(
                             markerPath,
                             (int)swAddComponentConfigOptions_e.swAddComponentConfigOptions_CurrentSelectedConfig,
-                            "",          // configuration name
-                            false,       // suppress
-                            "",          // component name
+                            "",
+                            false,
+                            "",
                             csInfo.X,
                             csInfo.Y,
                             csInfo.Z
@@ -283,7 +295,6 @@ namespace sw_drawer
 
                     if (newComp == null)
                     {
-                        // Last resort: try AddComponent2
                         Console.WriteLine($"  AddComponent5 failed, trying AddComponent2...");
                         newComp = (Component2)swAssy.AddComponent2(
                             markerPath,
@@ -296,33 +307,32 @@ namespace sw_drawer
                     if (newComp == null)
                     {
                         Console.WriteLine($"  All AddComponent methods failed for {csInfo.Name}");
-                        Console.WriteLine($"  Check: Is the assembly saved? Is it read-only? Is a sketch or feature being edited?");
+                        progressCount++;
+                        Console.WriteLine($"PROGRESS:{progressCount}");
                         continue;
                     }
 
                     Console.WriteLine($"  Component inserted: {newComp.Name2}");
-                    
-                    // Store for later processing
                     insertedComponents.Add(newComp);
                     componentNames.Add(markerName);
-
-                    // Apply color immediately
                     ApplyColorToComponent(newComp, csInfo.Name);
-
                     created++;
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  Error creating marker for {csInfo.Name}: {ex.Message}");
-                    Console.WriteLine($"  Stack trace: {ex.StackTrace}");
                 }
+                
+                progressCount++;
+                Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            // Restore command state
             swApp.CommandInProgress = false;
 
-            // Post-process: make virtual and rename
-            Console.WriteLine($"\nProcessing {insertedComponents.Count} components...");
+            // State: Post-processing
+            Console.WriteLine("STATE:PostProcessing");
+            Console.WriteLine($"Processing {insertedComponents.Count} components...");
+            
             for (int i = 0; i < insertedComponents.Count; i++)
             {
                 Component2 comp = insertedComponents[i];
@@ -330,14 +340,12 @@ namespace sw_drawer
                 
                 try
                 {
-                    // Make virtual
                     bool madeVirtual = comp.MakeVirtual2(false);
                     if (madeVirtual)
                     {
                         Console.WriteLine($"  Made virtual: {comp.Name2}");
                     }
                     
-                    // Rename
                     comp.Name2 = newName;
                     Console.WriteLine($"  Renamed to: {newName}");
                 }
@@ -345,16 +353,22 @@ namespace sw_drawer
                 {
                     Console.WriteLine($"  Warning processing {comp.Name2}: {ex.Message}");
                 }
+                
+                progressCount++;
+                Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            // Close the marker document
+            // State: Cleanup
+            Console.WriteLine("STATE:Cleanup");
             Console.WriteLine("Closing Marker document...");
             swApp.ActivateDoc2(assyTitle, false, ref activateErrors);
             swApp.CloseDoc(markerDoc.GetTitle());
 
             swModel = (ModelDoc2)swApp.ActiveDoc;
             swModel.EditRebuild3();
-            Console.WriteLine($"\nCreated {created} markers, skipped {skipped} existing");
+            
+            Console.WriteLine("STATE:Complete");
+            Console.WriteLine($"Created {created} markers, skipped {existingCount} existing");
             return true;
         }
 

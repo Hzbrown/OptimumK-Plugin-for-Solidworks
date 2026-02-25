@@ -71,6 +71,7 @@ class MarkerWorker(QThread):
     """Worker thread for marker operations."""
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(int, int)  # current, total
+    state_changed = pyqtSignal(str)  # state description
     log = pyqtSignal(str)
 
     def __init__(self, operation, *args):
@@ -79,6 +80,8 @@ class MarkerWorker(QThread):
         self.args = args
         self._abort = False
         self._process = None
+        self._total_tasks = 0
+        self._current_progress = 0
 
     def abort(self):
         """Request abort and terminate any running subprocess."""
@@ -93,13 +96,44 @@ class MarkerWorker(QThread):
                 except:
                     pass
 
+    def parse_output_line(self, line):
+        """Parse special output lines for progress and state."""
+        if line.startswith("TOTAL:"):
+            try:
+                self._total_tasks = int(line.split(":")[1])
+                self.progress.emit(0, self._total_tasks)
+            except:
+                pass
+            return None  # Don't show in log
+        elif line.startswith("PROGRESS:"):
+            try:
+                self._current_progress = int(line.split(":")[1])
+                self.progress.emit(self._current_progress, self._total_tasks)
+            except:
+                pass
+            return None  # Don't show in log
+        elif line.startswith("STATE:"):
+            state = line.split(":")[1]
+            state_descriptions = {
+                "Initializing": "Initializing...",
+                "LoadingMarker": "Loading marker template...",
+                "ScanningCoordSystems": "Scanning coordinate systems...",
+                "InsertingComponents": "Inserting marker components...",
+                "PostProcessing": "Post-processing: renaming components...",
+                "Cleanup": "Cleaning up...",
+                "Complete": "Complete"
+            }
+            description = state_descriptions.get(state, state)
+            self.state_changed.emit(description)
+            return None  # Don't show in log
+        return line  # Normal log line
+
     def run(self):
         stream = QtStream()
-        stream.text_written.connect(self.log.emit)
+        stream.text_written.connect(self._handle_log)
         old_stdout = sys.stdout
         sys.stdout = stream
         try:
-            # Pass self to operation so it can set _process for abort capability
             result = self.operation(*self.args, worker=self)
             if self._abort:
                 self.finished.emit(False, "Operation aborted")
@@ -112,6 +146,12 @@ class MarkerWorker(QThread):
                 self.finished.emit(False, str(e))
         finally:
             sys.stdout = old_stdout
+
+    def _handle_log(self, text):
+        """Handle log output, parsing special lines."""
+        result = self.parse_output_line(text)
+        if result is not None:
+            self.log.emit(result)
 
 
 class ImportOptimumKTab(QWidget):
@@ -553,10 +593,17 @@ class MarkersTab(QWidget):
         # Title
         layout.addWidget(QLabel("Marker Spheres - Visual indicators at hardpoints"))
         
+        # State label
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        self.state_label.setVisible(False)
+        layout.addWidget(self.state_label)
+        
         # Progress bar and abort button (hidden by default)
         h_progress = QHBoxLayout()
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
+        self.progress_bar.setFormat("%v / %m (%p%)")
         h_progress.addWidget(self.progress_bar)
         
         self.btn_abort = QPushButton("Abort")
@@ -706,11 +753,25 @@ class MarkersTab(QWidget):
         self.btn_create_all.setEnabled(enabled)
         self.btn_delete_all.setEnabled(enabled)
     
+    def on_progress(self, current, total):
+        """Update progress bar with current/total values."""
+        if total > 0:
+            self.progress_bar.setMaximum(total)
+            self.progress_bar.setValue(current)
+    
+    def on_state_changed(self, state_description):
+        """Update state label with current operation state."""
+        self.state_label.setText(state_description)
+        self.state_label.setVisible(True)
+    
     def start_loading(self, message):
         """Show progress bar and abort button."""
-        self.progress_bar.setRange(0, 0)  # Indeterminate mode
+        self.progress_bar.setRange(0, 0)  # Indeterminate mode initially
+        self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.btn_abort.setVisible(True)
+        self.state_label.setText("Starting...")
+        self.state_label.setVisible(True)
         self.set_buttons_enabled(False)
         self.status_text.append(f"\n{message}")
     
@@ -718,6 +779,7 @@ class MarkersTab(QWidget):
         """Hide progress bar and abort button."""
         self.progress_bar.setVisible(False)
         self.btn_abort.setVisible(False)
+        self.state_label.setVisible(False)
         self.set_buttons_enabled(True)
         self.worker = None
         if success:
@@ -742,6 +804,8 @@ class MarkersTab(QWidget):
         
         self.worker = MarkerWorker(create_all_markers_with_worker, radius)
         self.worker.log.connect(self.append_log)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.state_changed.connect(self.on_state_changed)
         self.worker.finished.connect(self.stop_loading)
         self.worker.start()
     
@@ -754,9 +818,11 @@ class MarkersTab(QWidget):
             
             self.worker = MarkerWorker(delete_all_markers_with_worker)
             self.worker.log.connect(self.append_log)
+            self.worker.progress.connect(self.on_progress)
+            self.worker.state_changed.connect(self.on_state_changed)
             self.worker.finished.connect(self.stop_loading)
             self.worker.start()
-    
+
     def set_visibility(self, func, visible, description):
         """Execute a visibility function and update status."""
         action = "Showing" if visible else "Hiding"
