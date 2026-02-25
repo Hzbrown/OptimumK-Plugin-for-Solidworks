@@ -100,8 +100,11 @@ class MarkerWorker(QThread):
         """Parse special output lines for progress and state."""
         if line.startswith("TOTAL:"):
             try:
-                self._total_tasks = int(line.split(":")[1])
-                self.progress.emit(0, self._total_tasks)
+                new_total = int(line.split(":")[1])
+                # Always update to the latest total (may be refined during execution)
+                self._total_tasks = new_total
+                # Emit progress with updated total, keeping current progress
+                self.progress.emit(self._current_progress, self._total_tasks)
             except:
                 pass
             return None  # Don't show in log
@@ -115,13 +118,14 @@ class MarkerWorker(QThread):
         elif line.startswith("STATE:"):
             state = line.split(":")[1]
             state_descriptions = {
-                "Initializing": "Initializing...",
-                "LoadingMarker": "Loading marker template...",
+                "Initializing": "Starting...",
+                "LoadingMarker": "Reading marker file...",
                 "ScanningCoordSystems": "Scanning coordinate systems...",
-                "InsertingComponents": "Inserting marker components...",
-                "PostProcessing": "Post-processing: renaming components...",
+                "InsertingComponents": "Inserting markers...",
+                "MatingMarkers": "Mating markers...",
+                "PostProcessing": "Post-processing markers...",
                 "Cleanup": "Cleaning up...",
-                "Complete": "Complete"
+                "Complete": "Done"
             }
             description = state_descriptions.get(state, state)
             self.state_changed.emit(description)
@@ -754,10 +758,20 @@ class MarkersTab(QWidget):
         self.btn_delete_all.setEnabled(enabled)
     
     def on_progress(self, current, total):
-        """Update progress bar with current/total values."""
+        """Update progress bar with current/total values like progressBar.setValue(i)."""
         if total > 0:
-            self.progress_bar.setMaximum(total)
+            # Set up determinate mode if not already set
+            if self.progress_bar.maximum() != total:
+                self.progress_bar.setRange(0, total)  # Like progressBar.setRange(0, steps)
+                self.progress_bar.setFormat("%v / %m (%p%)")  # Show "current / max (percentage%)"
+            
+            # Set current progress directly like progressBar.setValue(i)
             self.progress_bar.setValue(current)
+        else:
+            # Keep indeterminate mode if total is 0 or unknown
+            if self.progress_bar.maximum() != 0:
+                self.progress_bar.setRange(0, 0)  # Indeterminate mode
+                self.progress_bar.setFormat("Working...")
     
     def on_state_changed(self, state_description):
         """Update state label with current operation state."""
@@ -765,9 +779,11 @@ class MarkersTab(QWidget):
         self.state_label.setVisible(True)
     
     def start_loading(self, message):
-        """Show progress bar and abort button."""
-        self.progress_bar.setRange(0, 0)  # Indeterminate mode initially
+        """Show progress bar and abort button in indeterminate mode initially."""
+        # Start in indeterminate mode (animated) like progressBar.setRange(0, 0)
+        self.progress_bar.setRange(0, 0)  # Indeterminate mode until we get TOTAL
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Starting...")  # Show status text initially
         self.progress_bar.setVisible(True)
         self.btn_abort.setVisible(True)
         self.state_label.setText("Starting...")

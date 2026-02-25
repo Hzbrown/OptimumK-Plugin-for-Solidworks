@@ -14,6 +14,7 @@ namespace sw_drawer
         LoadingMarker,
         ScanningCoordSystems,
         InsertingComponents,
+        MatingMarkers,
         PostProcessing,
         Cleanup,
         Complete
@@ -211,25 +212,29 @@ namespace sw_drawer
 
             // State: Scanning coordinate systems
             Console.WriteLine("STATE:ScanningCoordSystems");
+
+            int totalCoordSystems = CountCoordinateSystems(swModel);
             List<CoordSystemInfo> coordSystems = GetAllCoordinateSystems(swModel);
-            
+
             // Filter out existing markers
-            List<CoordSystemInfo> coordSystemsToProcess = new List<CoordSystemInfo>();
+            var coordSystemsToProcess = new List<CoordSystemInfo>();
             int existingCount = 0;
             foreach (var csInfo in coordSystems)
             {
                 string markerName = csInfo.Name + "_Marker";
                 if (ComponentExists(swAssy, markerName))
-                {
                     existingCount++;
-                }
                 else
-                {
                     coordSystemsToProcess.Add(csInfo);
-                }
             }
 
-            int totalTasks = coordSystemsToProcess.Count * 2; // Insert + PostProcess for each
+            // Precompute total steps: scan + insert + mate + post (all per target)
+            int scanTasks = coordSystems.Count;
+            int insertTasks = coordSystemsToProcess.Count;
+            int mateTasks = coordSystemsToProcess.Count;
+            int postTasks = coordSystemsToProcess.Count;
+            int totalTasks = scanTasks + insertTasks + mateTasks + postTasks;
+
             Console.WriteLine($"TOTAL:{totalTasks}");
             Console.WriteLine($"Found {coordSystems.Count} coordinate systems ({existingCount} already have markers, {coordSystemsToProcess.Count} to create)");
 
@@ -241,24 +246,27 @@ namespace sw_drawer
                 return true;
             }
 
+            // Progress starts at 0; drive PROGRESS through every phase
+            int progressCount = 0;
+
+            // Emit scan progress (already have data, just advance bar)
+            foreach (var _ in coordSystems)
+            {
+                progressCount++;
+                Console.WriteLine($"PROGRESS:{progressCount}");
+            }
+
             swApp.CommandInProgress = true;
             swModel.ClearSelection2(true);
             swAssy.EditAssembly();
             swModel.ForceRebuild3(false);
 
-            List<Component2> insertedComponents = new List<Component2>();
-            List<string> componentNames = new List<string>();
-            
-            int created = 0;
-            int progressCount = 0;
-
-            // State: Inserting components
+            var workItems = new List<MarkerWorkItem>();
             Console.WriteLine("STATE:InsertingComponents");
-            
+
             foreach (var csInfo in coordSystemsToProcess)
             {
-                string markerName = csInfo.Name + "_Marker";
-
+                var item = new MarkerWorkItem { CsInfo = csInfo, NewName = csInfo.Name + "_Marker" };
                 try
                 {
                     Console.WriteLine($"Creating marker for: {csInfo.Name} at ({csInfo.X*1000:F1}, {csInfo.Y*1000:F1}, {csInfo.Z*1000:F1}) mm");
@@ -270,95 +278,70 @@ namespace sw_drawer
                     swAssy.EditAssembly();
                     swModel.ClearSelection2(true);
 
-                    Component2 newComp = (Component2)swAssy.AddComponent4(
-                        markerPath,
-                        "",
-                        csInfo.X,
-                        csInfo.Y,
-                        csInfo.Z
-                    );
-
+                    Component2 newComp = (Component2)swAssy.AddComponent4(markerPath, "", csInfo.X, csInfo.Y, csInfo.Z);
                     if (newComp == null)
+                        newComp = swAssy.AddComponent5(markerPath, (int)swAddComponentConfigOptions_e.swAddComponentConfigOptions_CurrentSelectedConfig, "", false, "", csInfo.X, csInfo.Y, csInfo.Z);
+                    if (newComp == null)
+                        newComp = (Component2)swAssy.AddComponent2(markerPath, csInfo.X, csInfo.Y, csInfo.Z);
+
+                    if (newComp != null)
                     {
-                        Console.WriteLine($"  AddComponent4 failed, trying AddComponent5...");
-                        newComp = swAssy.AddComponent5(
-                            markerPath,
-                            (int)swAddComponentConfigOptions_e.swAddComponentConfigOptions_CurrentSelectedConfig,
-                            "",
-                            false,
-                            "",
-                            csInfo.X,
-                            csInfo.Y,
-                            csInfo.Z
-                        );
+                        item.Comp = newComp;
+                        ApplyColorToComponent(newComp, csInfo.Name);
                     }
-
-                    if (newComp == null)
-                    {
-                        Console.WriteLine($"  AddComponent5 failed, trying AddComponent2...");
-                        newComp = (Component2)swAssy.AddComponent2(
-                            markerPath,
-                            csInfo.X,
-                            csInfo.Y,
-                            csInfo.Z
-                        );
-                    }
-
-                    if (newComp == null)
+                    else
                     {
                         Console.WriteLine($"  All AddComponent methods failed for {csInfo.Name}");
-                        progressCount++;
-                        Console.WriteLine($"PROGRESS:{progressCount}");
-                        continue;
                     }
-
-                    Console.WriteLine($"  Component inserted: {newComp.Name2}");
-                    insertedComponents.Add(newComp);
-                    componentNames.Add(markerName);
-                    ApplyColorToComponent(newComp, csInfo.Name);
-                    created++;
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  Error creating marker for {csInfo.Name}: {ex.Message}");
                 }
-                
+                workItems.Add(item);
+                progressCount++;
+                Console.WriteLine($"PROGRESS:{progressCount}");
+            }
+
+            Console.WriteLine("STATE:MatingMarkers");
+            foreach (var item in workItems)
+            {
+                try
+                {
+                    if (item.Comp != null)
+                        AddMateToCoordSystem(swApp, swModel, swAssy, item.Comp, item.CsInfo);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  Note: Mate skipped for {item.CsInfo.Name}: {ex.Message}");
+                }
                 progressCount++;
                 Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
             swApp.CommandInProgress = false;
 
-            // State: Post-processing
             Console.WriteLine("STATE:PostProcessing");
-            Console.WriteLine($"Processing {insertedComponents.Count} components...");
-            
-            for (int i = 0; i < insertedComponents.Count; i++)
+            foreach (var item in workItems)
             {
-                Component2 comp = insertedComponents[i];
-                string newName = componentNames[i];
-                
                 try
                 {
-                    bool madeVirtual = comp.MakeVirtual2(false);
-                    if (madeVirtual)
+                    if (item.Comp != null)
                     {
-                        Console.WriteLine($"  Made virtual: {comp.Name2}");
+                        bool madeVirtual = item.Comp.MakeVirtual2(false);
+                        if (madeVirtual) Console.WriteLine($"  Made virtual: {item.Comp.Name2}");
+                        item.Comp.Name2 = item.NewName;
+                        Console.WriteLine($"  Renamed to: {item.NewName}");
                     }
-                    
-                    comp.Name2 = newName;
-                    Console.WriteLine($"  Renamed to: {newName}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"  Warning processing {comp.Name2}: {ex.Message}");
+                    Console.WriteLine($"  Warning processing {item.NewName}: {ex.Message}");
                 }
-                
                 progressCount++;
                 Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            // State: Cleanup
             Console.WriteLine("STATE:Cleanup");
             Console.WriteLine("Closing Marker document...");
             swApp.ActivateDoc2(assyTitle, false, ref activateErrors);
@@ -368,14 +351,28 @@ namespace sw_drawer
             swModel.EditRebuild3();
             
             Console.WriteLine("STATE:Complete");
-            Console.WriteLine($"Created {created} markers, skipped {existingCount} existing");
+            Console.WriteLine($"Created {workItems.FindAll(w => w.Comp != null).Count} markers, skipped {existingCount} existing");
             return true;
+        }
+
+        private static int CountCoordinateSystems(ModelDoc2 swModel)
+        {
+            int count = 0;
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "CoordSys")
+                {
+                    count++;
+                }
+                feat = (Feature)feat.GetNextFeature();
+            }
+            return count;
         }
 
         private static List<CoordSystemInfo> GetAllCoordinateSystems(ModelDoc2 swModel)
         {
             var coordSystems = new List<CoordSystemInfo>();
-
             Feature feat = (Feature)swModel.FirstFeature();
             while (feat != null)
             {
@@ -384,26 +381,14 @@ namespace sw_drawer
                     try
                     {
                         CoordinateSystemFeatureData csData = (CoordinateSystemFeatureData)feat.GetDefinition();
-                        if (csData != null)
+                        if (csData != null && csData.AccessSelections(swModel, null))
                         {
-                            // Access selection needed to get transform
-                            bool accessOk = csData.AccessSelections(swModel, null);
-                            
                             MathTransform transform = csData.Transform;
                             if (transform != null)
                             {
                                 double[] td = (double[])transform.ArrayData;
-                                // ArrayData: [0-8] rotation matrix, [9-11] translation (meters)
-                                coordSystems.Add(new CoordSystemInfo
-                                {
-                                    Name = feat.Name,
-                                    Feature = feat,
-                                    X = td[9],
-                                    Y = td[10],
-                                    Z = td[11]
-                                });
+                                coordSystems.Add(new CoordSystemInfo { Name = feat.Name, Feature = feat, X = td[9], Y = td[10], Z = td[11] });
                             }
-                            
                             csData.ReleaseSelectionAccess();
                         }
                     }
@@ -414,7 +399,6 @@ namespace sw_drawer
                 }
                 feat = (Feature)feat.GetNextFeature();
             }
-
             return coordSystems;
         }
 
@@ -706,6 +690,13 @@ namespace sw_drawer
             public double X { get; set; }
             public double Y { get; set; }
             public double Z { get; set; }
+        }
+
+        private class MarkerWorkItem
+        {
+            public CoordSystemInfo CsInfo { get; set; }
+            public Component2 Comp { get; set; }
+            public string NewName { get; set; }
         }
     }
 }
