@@ -36,7 +36,7 @@ namespace sw_drawer
                     case "hardpoints":
                         if (args.Length < 2)
                         {
-                            Console.WriteLine("Usage: hardpoints <add|pose> [args]");
+                            Console.WriteLine("Usage: hardpoints <add|pose|insertpose> [args]");
                             PrintUsage();
                             return 1;
                         }
@@ -62,6 +62,15 @@ namespace sw_drawer
                                     return 1;
                                 }
                                 success = HardpointRunner.RunPose(args);
+                                break;
+                            case "insertpose":
+                                if (args.Length < 4)
+                                {
+                                    Console.WriteLine("Usage: hardpoints insertpose <jsonPath> <poseName>");
+                                    PrintUsage();
+                                    return 1;
+                                }
+                                success = HardpointRunner.RunInsertPose(args);
                                 break;
                             case "addwheels":
                                 if (args.Length < 4)

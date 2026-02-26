@@ -903,6 +903,595 @@ namespace sw_drawer
             }
         }
 
+        /// <summary>
+        /// Insert pose for active configuration only:
+        /// - create assembly coordinate systems for all hardpoints
+        /// - hide the new coordinate systems
+        /// - mate each hardpoint component origin to corresponding pose coordinate system
+        /// - place all pose coordinate systems into "&lt;PoseName&gt; Transforms" folder
+        /// </summary>
+        public static bool RunInsertPose(string[] args)
+        {
+            if (args.Length < 4)
+            {
+                Console.WriteLine("Usage: hardpoints insertpose <jsonPath> <poseName>");
+                return false;
+            }
+
+            string jsonPath = args[2];
+            string poseName = args[3];
+
+            ReportState(HardpointState.Initializing);
+
+            SldWorks swApp;
+            try
+            {
+                swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
+            }
+            catch
+            {
+                Console.WriteLine("Error: SolidWorks is not running");
+                return false;
+            }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null)
+            {
+                Console.WriteLine("Error: No active document");
+                return false;
+            }
+
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                Console.WriteLine("Error: Active document must be an assembly");
+                return false;
+            }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+
+            try
+            {
+                ReportState(HardpointState.LoadingJson);
+
+                string jsonDir = Path.GetDirectoryName(jsonPath);
+                string frontJsonPath = Path.Combine(jsonDir, "Front_Suspension.json");
+                string rearJsonPath = Path.Combine(jsonDir, "Rear_Suspension.json");
+
+                var hardpoints = new List<HardpointInfo>();
+
+                if (File.Exists(frontJsonPath))
+                {
+                    var frontData = LoadJsonData(frontJsonPath);
+                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints);
+                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints);
+                }
+
+                if (File.Exists(rearJsonPath))
+                {
+                    var rearData = LoadJsonData(rearJsonPath);
+                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints);
+                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints);
+                }
+
+                if (hardpoints.Count == 0)
+                {
+                    Console.WriteLine("Error: No hardpoints found in Front/Rear JSON files");
+                    return false;
+                }
+
+                ConfigurationManager cfgMgr = swModel.ConfigurationManager;
+                Configuration activeCfg = cfgMgr != null ? cfgMgr.ActiveConfiguration : null;
+                if (activeCfg == null)
+                {
+                    Console.WriteLine("Error: Could not determine active configuration");
+                    return false;
+                }
+                string activeConfigName = activeCfg.Name;
+                Console.WriteLine($"Active configuration: {activeConfigName}");
+
+                object componentsObj = swAssy.GetComponents(false);
+                object[] components = componentsObj as object[];
+                if (components == null || components.Length == 0)
+                {
+                    Console.WriteLine("Error: No components found in assembly");
+                    return false;
+                }
+
+                List<Component2> hardpointComponents = InsertPoseGetComponentsForPoseMatching(swModel, components);
+                Console.WriteLine($"Pose matching component pool: {hardpointComponents.Count}");
+
+                int totalSteps = hardpoints.Count * 2 + 2;
+                Console.WriteLine($"TOTAL:{totalSteps}");
+                int progressCount = 0;
+
+                var poseCoordFeatures = new List<Feature>();
+
+                ReportState(HardpointState.CreatingCoordinateSystems);
+                foreach (var hardpoint in hardpoints)
+                {
+                    string hardpointName = $"{hardpoint.BaseName}{hardpoint.Suffix}";
+                    string poseCoordName = $"{poseName} {hardpointName}";
+
+                    // Reuse InsertCoordinate implementation for coordinate creation behavior.
+                    Feature csFeat = InsertCoordinate.InsertCoordinateSystemFeature(
+                        swModel,
+                        poseCoordName,
+                        hardpoint.X,
+                        hardpoint.Y,
+                        hardpoint.Z,
+                        hardpoint.AngleX,
+                        hardpoint.AngleY,
+                        hardpoint.AngleZ,
+                        createAtOrigin: false,
+                        folderName: null,
+                        hideInGui: true);
+
+                    if (csFeat != null)
+                    {
+                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, csFeat, activeConfigName);
+                        poseCoordFeatures.Add(csFeat);
+                    }
+
+                    progressCount++;
+                    ReportProgress(progressCount);
+
+                    Component2 targetComp = InsertPoseFindComponentByHardpointName(hardpointComponents, hardpointName);
+                    if (targetComp != null)
+                    {
+                        Console.WriteLine($"Matched hardpoint '{hardpointName}' to component '{targetComp.Name2}'");
+                        InsertPoseCreateCoordinateSystemMate(
+                            swModel,
+                            swAssy,
+                            targetComp,
+                            hardpointName,
+                            poseCoordName,
+                            activeConfigName);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Warning: Could not find hardpoint component '{hardpointName}' for mating");
+                    }
+
+                    progressCount++;
+                    ReportProgress(progressCount);
+                }
+
+                ReportState(HardpointState.CreatingTransformsFolder);
+                InsertPoseCreateOrPopulateTransformsFolder(swModel, poseCoordFeatures, $"{poseName} Transforms");
+                progressCount++;
+                ReportProgress(progressCount);
+
+                ReportState(HardpointState.Rebuilding);
+                swModel.EditRebuild3();
+                progressCount++;
+                ReportProgress(progressCount);
+
+                ReportState(HardpointState.Complete);
+                Console.WriteLine($"Inserted pose '{poseName}' for {poseCoordFeatures.Count} hardpoints in active config '{activeConfigName}'");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void InsertPoseSetFeatureToActiveConfigurationOnly(ModelDoc2 swModel, Feature feat, string activeConfigName)
+        {
+            if (swModel == null || feat == null || string.IsNullOrWhiteSpace(activeConfigName))
+            {
+                return;
+            }
+
+            try
+            {
+                object configNamesObj = swModel.GetConfigurationNames();
+                string[] configNames = configNamesObj as string[];
+                if (configNames == null || configNames.Length == 0)
+                {
+                    return;
+                }
+
+                foreach (string cfgName in configNames)
+                {
+                    int state = string.Equals(cfgName, activeConfigName, StringComparison.OrdinalIgnoreCase)
+                        ? (int)swFeatureSuppressionAction_e.swUnSuppressFeature
+                        : (int)swFeatureSuppressionAction_e.swSuppressFeature;
+
+                    feat.SetSuppression2(
+                        state,
+                        (int)swInConfigurationOpts_e.swSpecifyConfiguration,
+                        new string[] { cfgName });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not scope feature '{feat.Name}' to active configuration: {ex.Message}");
+            }
+        }
+
+        private static Component2 InsertPoseFindComponentByHardpointName(List<Component2> components, string hardpointName)
+        {
+            if (components == null || string.IsNullOrWhiteSpace(hardpointName))
+            {
+                return null;
+            }
+
+            string targetNormalized = InsertPoseNormalizeComponentName(hardpointName);
+            Component2 startsWithMatch = null;
+            Component2 containsMatch = null;
+
+            foreach (Component2 comp in components)
+            {
+                if (comp == null)
+                {
+                    continue;
+                }
+
+                string compName = comp.Name2 ?? string.Empty;
+                string compNormalized = InsertPoseNormalizeComponentName(compName);
+
+                if (string.Equals(compName, hardpointName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(compNormalized, targetNormalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    return comp;
+                }
+
+                if (startsWithMatch == null &&
+                    (compName.StartsWith(hardpointName, StringComparison.OrdinalIgnoreCase) ||
+                     compNormalized.StartsWith(targetNormalized, StringComparison.OrdinalIgnoreCase)))
+                {
+                    startsWithMatch = comp;
+                }
+
+                if (containsMatch == null &&
+                    (compName.IndexOf(hardpointName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     compNormalized.IndexOf(targetNormalized, StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    containsMatch = comp;
+                }
+            }
+
+            return startsWithMatch ?? containsMatch;
+        }
+
+        private static List<Component2> InsertPoseGetComponentsForPoseMatching(ModelDoc2 swModel, object[] allComponents)
+        {
+            var result = new List<Component2>();
+            if (allComponents == null)
+            {
+                return result;
+            }
+
+            HashSet<string> hardpointFolderNames = InsertPoseGetHardpointFolderComponentNames(swModel);
+            if (hardpointFolderNames.Count == 0)
+            {
+                foreach (object obj in allComponents)
+                {
+                    Component2 comp = obj as Component2;
+                    if (comp != null)
+                    {
+                        result.Add(comp);
+                    }
+                }
+
+                Console.WriteLine($"Warning: Hardpoints folder not found/empty. Using all {result.Count} components for pose matching.");
+                return result;
+            }
+
+            foreach (object obj in allComponents)
+            {
+                Component2 comp = obj as Component2;
+                if (comp == null)
+                {
+                    continue;
+                }
+
+                string normalized = InsertPoseNormalizeComponentName(comp.Name2);
+                if (hardpointFolderNames.Contains(normalized))
+                {
+                    result.Add(comp);
+                }
+            }
+
+            if (result.Count == 0)
+            {
+                foreach (object obj in allComponents)
+                {
+                    Component2 comp = obj as Component2;
+                    if (comp != null)
+                    {
+                        result.Add(comp);
+                    }
+                }
+
+                Console.WriteLine($"Warning: No components matched Hardpoints folder names. Falling back to all {result.Count} components.");
+            }
+
+            return result;
+        }
+
+        private static HashSet<string> InsertPoseGetHardpointFolderComponentNames(ModelDoc2 swModel)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (swModel == null)
+            {
+                return names;
+            }
+
+            try
+            {
+                Feature hardpointsFolder = InsertPoseFindFolder(swModel, "Hardpoints");
+                if (hardpointsFolder == null)
+                {
+                    return names;
+                }
+
+                // Try IFeatureFolder.GetFeatures (SOLIDWORKS API example style)
+                FeatureFolder featureFolder = hardpointsFolder.GetSpecificFeature2() as FeatureFolder;
+                if (featureFolder != null)
+                {
+                    object[] folderFeatures = featureFolder.GetFeatures() as object[];
+                    if (folderFeatures != null)
+                    {
+                        foreach (object obj in folderFeatures)
+                        {
+                            Feature feat = obj as Feature;
+                            if (feat == null)
+                            {
+                                continue;
+                            }
+
+                            string normalized = InsertPoseNormalizeComponentName(feat.Name);
+                            if (!string.IsNullOrWhiteSpace(normalized))
+                            {
+                                names.Add(normalized);
+                            }
+                        }
+                    }
+                }
+
+                // Fallback: iterate subfeatures under folder
+                if (names.Count == 0)
+                {
+                    Feature subFeat = (Feature)hardpointsFolder.GetFirstSubFeature();
+                    while (subFeat != null)
+                    {
+                        string normalized = InsertPoseNormalizeComponentName(subFeat.Name);
+                        if (!string.IsNullOrWhiteSpace(normalized))
+                        {
+                            names.Add(normalized);
+                        }
+
+                        subFeat = (Feature)subFeat.GetNextSubFeature();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not read Hardpoints folder contents: {ex.Message}");
+            }
+
+            return names;
+        }
+
+        private static string InsertPoseNormalizeComponentName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return string.Empty;
+            }
+
+            string normalized = name.Trim();
+
+            // Strip display wrappers like "[ ... ]" if present
+            int leftBracket = normalized.IndexOf('[');
+            int rightBracket = normalized.IndexOf(']');
+            if (leftBracket >= 0 && rightBracket > leftBracket)
+            {
+                normalized = normalized.Substring(leftBracket + 1, rightBracket - leftBracket - 1).Trim();
+            }
+
+            // Strip assembly path/instance decorations
+            int caretIdx = normalized.IndexOf('^');
+            if (caretIdx > 0)
+            {
+                normalized = normalized.Substring(0, caretIdx);
+            }
+
+            int angleIdx = normalized.IndexOf('<');
+            if (angleIdx > 0)
+            {
+                normalized = normalized.Substring(0, angleIdx);
+            }
+
+            // Strip trailing instance suffix like "-1", "-23"
+            int dashIdx = normalized.LastIndexOf('-');
+            if (dashIdx > 0 && dashIdx < normalized.Length - 1)
+            {
+                bool allDigits = true;
+                for (int i = dashIdx + 1; i < normalized.Length; i++)
+                {
+                    if (!char.IsDigit(normalized[i]))
+                    {
+                        allDigits = false;
+                        break;
+                    }
+                }
+
+                if (allDigits)
+                {
+                    normalized = normalized.Substring(0, dashIdx);
+                }
+            }
+
+            return normalized.Trim();
+        }
+
+        private static void InsertPoseCreateCoordinateSystemMate(
+            ModelDoc2 swModel,
+            AssemblyDoc swAssy,
+            Component2 comp,
+            string componentCoordName,
+            string poseCoordName,
+            string activeConfigName)
+        {
+            if (swModel == null || swAssy == null || comp == null ||
+                string.IsNullOrWhiteSpace(componentCoordName) ||
+                string.IsNullOrWhiteSpace(poseCoordName))
+            {
+                return;
+            }
+
+            try
+            {
+                swModel.ClearSelection2(true);
+
+                bool csSelected = swModel.Extension.SelectByID2(
+                    poseCoordName,
+                    "COORDSYS",
+                    0, 0, 0,
+                    false,
+                    1,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (!csSelected)
+                {
+                    Console.WriteLine($"Warning: Could not select pose CSys '{poseCoordName}' for mate");
+                    swModel.ClearSelection2(true);
+                    return;
+                }
+
+                bool compCsSelected = swModel.Extension.SelectByID2(
+                    componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
+                    "COORDSYS",
+                    0, 0, 0,
+                    true,
+                    2,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (!compCsSelected)
+                {
+                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
+                    swModel.ClearSelection2(true);
+                    return;
+                }
+
+                int mateError;
+                Mate2 mate = swAssy.AddMate5(
+                    (int)swMateType_e.swMateCOINCIDENT,
+                    (int)swMateAlign_e.swMateAlignALIGNED,
+                    false,
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                    false,
+                    false,
+                    (int)swMateWidthOptions_e.swMateWidth_Centered,
+                    out mateError);
+
+                if (mate == null || mateError != 0)
+                {
+                    Console.WriteLine($"Warning: Could not create mate for '{comp.Name2}' to '{poseCoordName}' (error {mateError})");
+                }
+                else
+                {
+                    // Scope mate to active configuration only (best effort).
+                    Feature mateFeat = (Feature)swModel.FeatureByPositionReverse(0);
+                    if (mateFeat != null)
+                    {
+                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeat, activeConfigName);
+                    }
+                }
+
+                swModel.ClearSelection2(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to mate '{comp.Name2}' to '{poseCoordName}': {ex.Message}");
+                try { swModel.ClearSelection2(true); } catch { }
+            }
+        }
+
+        private static void InsertPoseCreateOrPopulateTransformsFolder(ModelDoc2 swModel, List<Feature> coordFeatures, string folderName)
+        {
+            if (swModel == null || coordFeatures == null || coordFeatures.Count == 0 || string.IsNullOrWhiteSpace(folderName))
+            {
+                return;
+            }
+
+            try
+            {
+                FeatureManager featMgr = swModel.FeatureManager;
+                if (featMgr == null)
+                {
+                    return;
+                }
+
+                Feature existingFolder = InsertPoseFindFolder(swModel, folderName);
+                if (existingFolder != null)
+                {
+                    foreach (Feature feat in coordFeatures)
+                    {
+                        if (feat != null)
+                        {
+                            featMgr.MoveToFolder(folderName, feat.Name, false);
+                        }
+                    }
+                    Console.WriteLine($"Added coordinate systems to existing folder '{folderName}'");
+                    return;
+                }
+
+                swModel.ClearSelection2(true);
+                int selectedCount = 0;
+                foreach (Feature feat in coordFeatures)
+                {
+                    if (feat != null && feat.Select2(true, 0))
+                    {
+                        selectedCount++;
+                    }
+                }
+
+                if (selectedCount == 0)
+                {
+                    swModel.ClearSelection2(true);
+                    return;
+                }
+
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                if (folder != null)
+                {
+                    folder.Name = folderName;
+                    Console.WriteLine($"Created folder '{folderName}'");
+                }
+
+                swModel.ClearSelection2(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to create/populate folder '{folderName}': {ex.Message}");
+                try { swModel.ClearSelection2(true); } catch { }
+            }
+        }
+
+        private static Feature InsertPoseFindFolder(ModelDoc2 swModel, string folderName)
+        {
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "FtrFolder" &&
+                    string.Equals(feat.Name, folderName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return feat;
+                }
+
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            return null;
+        }
+
         private static void CreateOrUpdateTransform(PartDoc swPart, BodyTransformInfo bodyTransform, string configName)
         {
             try

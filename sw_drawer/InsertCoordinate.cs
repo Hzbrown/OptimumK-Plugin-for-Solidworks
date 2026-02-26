@@ -7,22 +7,19 @@ namespace sw_drawer
 {
     public static class InsertCoordinate
     {
-        /// <summary>
-        /// Inserts or updates a coordinate system in the active SolidWorks document.
-        /// Creates at assembly origin (0,0,0) - position comes in pose step.
-        /// Rotation angles are applied immediately (for wheel toe/camber).
-        /// </summary>
-        public static bool InsertCoordinateSystem(
-            SldWorks swApp,
+        public static Feature InsertCoordinateSystemFeature(
+            ModelDoc2 swDoc,
             string name,
             double x, double y, double z,
-            double angleX = 0, double angleY = 0, double angleZ = 0)
+            double angleX = 0, double angleY = 0, double angleZ = 0,
+            bool createAtOrigin = true,
+            string folderName = "Coordinates",
+            bool hideInGui = false)
         {
-            ModelDoc2 swDoc = (ModelDoc2)swApp.ActiveDoc;
             if (swDoc == null)
             {
                 Console.WriteLine("No active document found.");
-                return false;
+                return null;
             }
 
             bool useRotation = (angleX != 0 || angleY != 0 || angleZ != 0);
@@ -42,80 +39,110 @@ namespace sw_drawer
 
             if (exists)
             {
-                // Preserve the existing feature - just clear its entity reference
                 SelectionMgr selMgr = (SelectionMgr)swDoc.SelectionManager;
-                Feature coordFeat = (Feature)selMgr.GetSelectedObject6(1, -1);
-
-                if (coordFeat != null)
-                {
-                    CoordinateSystemFeatureData coordData = (CoordinateSystemFeatureData)coordFeat.GetDefinition();
-                    if (coordData != null)
-                    {
-                        bool accessOk = coordData.AccessSelections(swDoc, null);
-                        if (accessOk)
-                        {
-                            coordData.OriginEntity = null;
-                            bool modified = coordFeat.ModifyDefinition(coordData, swDoc, null);
-                            coordData.ReleaseSelectionAccess();
-
-                            if (modified)
-                            {
-                                swDoc.ClearSelection2(true);
-                                swDoc.EditRebuild3();
-                                Console.WriteLine($"Already exists, kept: '{name}'");
-                                return true;
-                            }
-                        }
-                    }
-                }
-
+                Feature existingFeat = (Feature)selMgr.GetSelectedObject6(1, -1);
                 swDoc.ClearSelection2(true);
-                return false;
+
+                if (existingFeat != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(folderName))
+                    {
+                        MoveFeatureToFolder(swDoc, existingFeat, folderName);
+                    }
+
+                    if (hideInGui)
+                    {
+                        HideReferenceGeometry(swDoc, existingFeat);
+                    }
+
+                    Console.WriteLine($"Coordinate system '{name}' already exists.");
+                    return existingFeat;
+                }
             }
 
             swDoc.ClearSelection2(true);
 
-            // Create coordinate system at assembly origin (0, 0, 0).
-            // Position comes in the pose step via mates/transforms.
+            double deltaX = createAtOrigin ? 0.0 : x / 1000.0; // mm -> m
+            double deltaY = createAtOrigin ? 0.0 : y / 1000.0;
+            double deltaZ = createAtOrigin ? 0.0 : z / 1000.0;
+
             Feature newFeat = swDoc.FeatureManager
                 .CreateCoordinateSystemUsingNumericalValues(
-                    true,           // UseLocation
-                    0.0,            // DeltaX = 0 (at assembly origin)
-                    0.0,            // DeltaY = 0 (at assembly origin)
-                    0.0,            // DeltaZ = 0 (at assembly origin)
-                    useRotation,    // UseRotation (toe/camber for wheels)
-                    radX,           // AngleX (radians)
-                    radY,           // AngleY (radians)
-                    radZ            // AngleZ (radians)
+                    true,
+                    deltaX,
+                    deltaY,
+                    deltaZ,
+                    useRotation,
+                    radX,
+                    radY,
+                    radZ
                 ) as Feature;
 
             if (newFeat == null)
             {
                 Console.WriteLine($"Failed to create coordinate system '{name}'.");
-                return false;
+                return null;
             }
 
             newFeat.Name = name;
 
-            // Organise into "Coordinates" folder
-            MoveToCoordinatesFolder(swDoc, newFeat);
+            if (!string.IsNullOrWhiteSpace(folderName))
+            {
+                MoveFeatureToFolder(swDoc, newFeat, folderName);
+            }
+
+            if (hideInGui)
+            {
+                HideReferenceGeometry(swDoc, newFeat);
+            }
 
             swDoc.EditRebuild3();
 
-            Console.WriteLine(useRotation
-                ? $"Created: '{name}' at origin, angles ({angleX}, {angleY}, {angleZ}) deg."
-                : $"Created: '{name}' at origin.");
+            if (createAtOrigin)
+            {
+                Console.WriteLine(useRotation
+                    ? $"Coordinate system '{name}' created at origin, angles ({angleX}, {angleY}, {angleZ}) deg."
+                    : $"Coordinate system '{name}' created at origin.");
+            }
+            else
+            {
+                Console.WriteLine(useRotation
+                    ? $"Coordinate system '{name}' created at ({x}, {y}, {z}) mm, angles ({angleX}, {angleY}, {angleZ}) deg."
+                    : $"Coordinate system '{name}' created at ({x}, {y}, {z}) mm.");
+            }
 
-            return true;
+            return newFeat;
         }
 
         /// <summary>
-        /// Moves a feature into the "Coordinates" folder, creating it if it doesn't exist.
+        /// Inserts or updates a coordinate system in the active SolidWorks document.
+        /// Creates at assembly origin (0,0,0) - position comes in pose step.
+        /// Rotation angles are applied immediately (for wheel toe/camber).
+        /// </summary>
+        public static bool InsertCoordinateSystem(
+            SldWorks swApp,
+            string name,
+            double x, double y, double z,
+            double angleX = 0, double angleY = 0, double angleZ = 0)
+        {
+            ModelDoc2 swDoc = (ModelDoc2)swApp.ActiveDoc;
+            Feature feat = InsertCoordinateSystemFeature(
+                swDoc,
+                name,
+                x, y, z,
+                angleX, angleY, angleZ,
+                createAtOrigin: true,
+                folderName: "Coordinates",
+                hideInGui: false);
+            return feat != null;
+        }
+
+        /// <summary>
+        /// Moves a feature into a folder, creating it if it doesn't exist.
         /// Uses IFeatureManager.InsertFeatureTreeFolder2 and MoveToFolder.
         /// </summary>
-        private static void MoveToCoordinatesFolder(ModelDoc2 swDoc, Feature feat)
+        private static void MoveFeatureToFolder(ModelDoc2 swDoc, Feature feat, string folderName)
         {
-            const string folderName = "Coordinates";
             FeatureManager featMgr = swDoc.FeatureManager;
 
             // Search for existing folder
@@ -156,6 +183,24 @@ namespace sw_drawer
                 }
 
                 swDoc.ClearSelection2(true);
+            }
+        }
+
+        private static void HideReferenceGeometry(ModelDoc2 swDoc, Feature feat)
+        {
+            try
+            {
+                swDoc.ClearSelection2(true);
+                bool selected = feat.Select2(false, 0);
+                if (selected)
+                {
+                    swDoc.BlankRefGeom();
+                }
+                swDoc.ClearSelection2(true);
+            }
+            catch
+            {
+                try { swDoc.ClearSelection2(true); } catch { }
             }
         }
 
