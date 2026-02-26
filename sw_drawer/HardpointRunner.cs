@@ -92,6 +92,8 @@ namespace sw_drawer
                 {
                     var frontData = LoadJsonData(frontJsonPath);
                     ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints);
+                    // Also extract wheels from front suspension
+                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints);
                     Console.WriteLine($"Loaded {hardpoints.Count} hardpoints from Front_Suspension.json");
                 }
                 
@@ -101,6 +103,8 @@ namespace sw_drawer
                 {
                     var rearData = LoadJsonData(rearJsonPath);
                     ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints);
+                    // Also extract wheels from rear suspension
+                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints);
                     Console.WriteLine($"Loaded {hardpoints.Count - frontCount} hardpoints from Rear_Suspension.json");
                 }
                 
@@ -155,8 +159,8 @@ namespace sw_drawer
                         progressCount++;
                         ReportProgress(progressCount);
                         
-                        // Step 4: Rename internal coordinate system
-                        RenameInternalCoordinateSystem(swModel, partInfo);
+                        // Step 4: Rename internal coordinate system using EditPart2
+                        RenameInternalCoordinateSystem(swApp, swAssy, swModel, partInfo);
                         progressCount++;
                         ReportProgress(progressCount);
                         
@@ -331,6 +335,65 @@ namespace sw_drawer
                         Y = -halfTrackDouble,
                         Z = tireRadius
                     });
+                }
+            }
+        }
+
+        private static void ExtractWheelsFromJson(Dictionary<string, object> jsonData, string suffix, List<HardpointInfo> hardpoints)
+        {
+            if (jsonData.TryGetValue("Wheels", out object wheelsObj) && wheelsObj is Dictionary<string, object> wheelsData)
+            {
+                // Extract wheels data and create hardpoints with the specified suffix
+                if (wheelsData.TryGetValue("Half Track", out object halfTrackObj) &&
+                    wheelsData.TryGetValue("Tire Diameter", out object tireDiameterObj))
+                {
+                    Dictionary<string, object> halfTrack = halfTrackObj as Dictionary<string, object>;
+                    Dictionary<string, object> tireDiameter = tireDiameterObj as Dictionary<string, object>;
+                    
+                    if (halfTrack != null && tireDiameter != null &&
+                        halfTrack.TryGetValue("left", out object halfTrackValue) &&
+                        tireDiameter.TryGetValue("left", out object tireDiameterValue))
+                    {
+                        double halfTrackDouble = Convert.ToDouble(halfTrackValue);
+                        double tireRadius = Convert.ToDouble(tireDiameterValue) / 2.0;
+
+                        // Create wheels with the specified suffix (FRONT or REAR)
+                        hardpoints.Add(new HardpointInfo
+                        {
+                            BaseName = "FL_wheel",
+                            Suffix = suffix,
+                            X = 0, // Will be set by reference distance
+                            Y = halfTrackDouble,
+                            Z = tireRadius
+                        });
+
+                        hardpoints.Add(new HardpointInfo
+                        {
+                            BaseName = "FR_wheel", 
+                            Suffix = suffix,
+                            X = 0,
+                            Y = -halfTrackDouble,
+                            Z = tireRadius
+                        });
+
+                        hardpoints.Add(new HardpointInfo
+                        {
+                            BaseName = "RL_wheel",
+                            Suffix = suffix,
+                            X = 0,
+                            Y = halfTrackDouble,
+                            Z = tireRadius
+                        });
+
+                        hardpoints.Add(new HardpointInfo
+                        {
+                            BaseName = "RR_wheel",
+                            Suffix = suffix, 
+                            X = 0,
+                            Y = -halfTrackDouble,
+                            Z = tireRadius
+                        });
+                    }
                 }
             }
         }
@@ -1001,14 +1064,10 @@ namespace sw_drawer
         {
             try
             {
-                // Convert mm to meters for SolidWorks
-                double x = hardpoint.X / 1000.0;
-                double y = hardpoint.Y / 1000.0;
-                double z = hardpoint.Z / 1000.0;
+                // Insert ALL marker parts at assembly origin (0,0,0).
+                // Actual position comes in the pose step via mates.
+                Component2 newComp = (Component2)swAssy.AddComponent4(markerDoc.GetPathName(), "", 0, 0, 0);
 
-                // Use InsertPart2 to insert the marker as a virtual part
-                Component2 newComp = (Component2)swAssy.AddComponent4(markerDoc.GetPathName(), "", x, y, z);
-                
                 if (newComp == null)
                 {
                     Console.WriteLine($"Failed to insert virtual part for {hardpoint.BaseName}");
@@ -1021,9 +1080,12 @@ namespace sw_drawer
                     OriginalName = newComp.Name2,
                     BaseName = hardpoint.BaseName,
                     Suffix = hardpoint.Suffix,
-                    X = x,
-                    Y = y,
-                    Z = z
+                    X = hardpoint.X / 1000.0,
+                    Y = hardpoint.Y / 1000.0,
+                    Z = hardpoint.Z / 1000.0,
+                    AngleX = hardpoint.AngleX,
+                    AngleY = hardpoint.AngleY,
+                    AngleZ = hardpoint.AngleZ
                 };
             }
             catch (Exception ex)
@@ -1106,39 +1168,58 @@ namespace sw_drawer
             }
         }
 
-        private static void RenameInternalCoordinateSystem(ModelDoc2 swModel, VirtualPartInfo partInfo)
+        /// <summary>
+        /// Renames the coordinate system inside a virtual marker part using EditPart2.
+        /// EditPart2 enters in-context editing of the selected virtual component.
+        /// </summary>
+        private static void RenameInternalCoordinateSystem(SldWorks swApp, AssemblyDoc swAssy, ModelDoc2 swModel, VirtualPartInfo partInfo)
         {
+            string newCsName = $"CS_{partInfo.RenamedName}";
             try
             {
-                // The internal coordinate system in Marker.SLDPRT is called "Coordinate System1"
-                // We need to rename it in the context of this virtual component
-                string oldCsName = "Coordinate System1@" + partInfo.RenamedName;
-                string newCsName = $"CS_{partInfo.RenamedName}";
-                
-                // Try to select and rename the coordinate system feature
-                bool selected = swModel.Extension.SelectByID2(
-                    oldCsName, "COORDSYS", 0, 0, 0, false, 0, null,
-                    (int)swSelectOption_e.swSelectOptionDefault);
-                
-                if (selected)
+                // Select the virtual component
+                swModel.ClearSelection2(true);
+                partInfo.Component.Select4(false, null, false);
+
+                // Enter in-context part editing via EditPart2
+                // Parameters: Silent=true, AllowReadOnly=false, Information (out)
+                int editInfo = 0;
+                int editResult = swAssy.EditPart2(true, false, ref editInfo);
+
+                if (editResult == (int)swEditPartCommandStatus_e.swEditPartSuccessful)
                 {
-                    SelectionMgr selMgr = (SelectionMgr)swModel.SelectionManager;
-                    Feature feat = (Feature)selMgr.GetSelectedObject6(1, -1);
-                    if (feat != null)
+                    // Active doc is now the virtual part document
+                    ModelDoc2 partDoc = (ModelDoc2)swApp.ActiveDoc;
+                    if (partDoc != null)
                     {
-                        feat.Name = newCsName;
-                        Console.WriteLine($"Renamed internal coordinate system to: {newCsName}");
+                        // Walk features to find the first CoordSys
+                        Feature f = (Feature)partDoc.FirstFeature();
+                        while (f != null)
+                        {
+                            if (f.GetTypeName2() == "CoordSys")
+                            {
+                                f.Name = newCsName;
+                                Console.WriteLine($"Renamed internal coordinate system to: {newCsName}");
+                                break;
+                            }
+                            f = (Feature)f.GetNextFeature();
+                        }
                     }
-                    swModel.ClearSelection2(true);
+                    // Exit in-context editing, return to assembly
+                    swAssy.EditAssembly();
                 }
                 else
                 {
-                    Console.WriteLine($"Warning: Could not find internal coordinate system for {partInfo.RenamedName}");
+                    Console.WriteLine($"Warning: EditPart2 returned {editResult} (info={editInfo}) for {partInfo.RenamedName}");
                 }
+
+                swModel.ClearSelection2(true);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error renaming internal coordinate system: {ex.Message}");
+                Console.WriteLine($"Error renaming internal coordinate system for {partInfo.RenamedName}: {ex.Message}");
+                // Try to recover by returning to assembly edit mode
+                try { swAssy.EditAssembly(); } catch { }
             }
         }
 
@@ -1313,6 +1394,50 @@ namespace sw_drawer
             {
                 Console.WriteLine($"Error creating mate for {partInfo.RenamedName}: {ex.Message}");
                 swModel.ClearSelection2(true);
+            }
+        }
+
+
+        private static void CreateWheelHardpointsFolder(AssemblyDoc swAssy, List<VirtualPartInfo> parts)
+        {
+            try
+            {
+                // Get the feature manager and create a folder
+                ModelDoc2 swModel = (ModelDoc2)swAssy;
+                FeatureManager featMgr = swModel.FeatureManager;
+                
+                // Select all the virtual parts to group them using SelectByID2
+                swModel.ClearSelection2(true);
+                int selectedCount = 0;
+                foreach (var partInfo in parts)
+                {
+                    // Select component by name in assembly
+                    string compName = partInfo.RenamedName + "@" + swModel.GetTitle();
+                    bool selected = swModel.Extension.SelectByID2(
+                        compName, "COMPONENT", 0, 0, 0, true, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    
+                    if (selected)
+                    {
+                        selectedCount++;
+                    }
+                }
+
+                Console.WriteLine($"Selected {selectedCount} wheel components for folder");
+
+                // Create feature folder
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                if (folder != null)
+                {
+                    folder.Name = "Wheel Hardpoints";
+                    Console.WriteLine("Created Wheel Hardpoints folder");
+                }
+
+                swModel.ClearSelection2(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating Wheel Hardpoints folder: {ex.Message}");
             }
         }
 
@@ -1539,6 +1664,10 @@ namespace sw_drawer
             public double X { get; set; }
             public double Y { get; set; }
             public double Z { get; set; }
+            // Rotation angles in degrees (used for wheels: camber/toe)
+            public double AngleX { get; set; }
+            public double AngleY { get; set; }
+            public double AngleZ { get; set; }
         }
 
         private class BodyInfo
@@ -1570,6 +1699,10 @@ namespace sw_drawer
             public double X { get; set; }
             public double Y { get; set; }
             public double Z { get; set; }
+            // Rotation angles in degrees (used for wheels: camber/toe)
+            public double AngleX { get; set; }
+            public double AngleY { get; set; }
+            public double AngleZ { get; set; }
         }
 
         private class VirtualPartTransformInfo
@@ -1577,6 +1710,275 @@ namespace sw_drawer
             public Component2 Component { get; set; }
             public HardpointInfo Hardpoint { get; set; }
             public string CoordSystemName { get; set; }
+        }
+
+        // =====================================================================
+        // Wheel insertion – separate from suspension hardpoints
+        // Mirrors draw_suspension.py InsertWheel logic.
+        // All virtual markers are placed at assembly origin (0,0,0);
+        // toe/camber are stored in the part's internal coordinate system.
+        // =====================================================================
+
+        /// <summary>
+        /// Inserts wheel marker virtual parts from a JSON suspension file.
+        /// Usage: hardpoints addwheels <jsonPath> <markerPartPath> [rear] [referenceDistance]
+        /// </summary>
+        public static bool RunAddWheels(string[] args)
+        {
+            if (args.Length < 4)
+            {
+                Console.WriteLine("Usage: hardpoints addwheels <jsonPath> <markerPartPath> [rear] [referenceDistanceMM]");
+                return false;
+            }
+
+            string jsonPath       = args[2];
+            string markerPartPath = args[3];
+            bool   isRear         = args.Length > 4 && args[4].ToLowerInvariant() == "rear";
+            double refDistance    = 0.0;
+            if (args.Length > 5) double.TryParse(args[5], out refDistance);
+
+            ReportState(HardpointState.Initializing);
+
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null) { Console.WriteLine("Error: No active document"); return false; }
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+
+            if (!File.Exists(markerPartPath))
+            { Console.WriteLine($"Error: Marker part not found at {markerPartPath}"); return false; }
+
+            try
+            {
+                ReportState(HardpointState.LoadingJson);
+                var jsonData = LoadJsonData(jsonPath);
+
+                // Extract wheels section
+                if (!jsonData.TryGetValue("Wheels", out object wheelsObj) || !(wheelsObj is Dictionary<string, object> wheelsData))
+                {
+                    Console.WriteLine("Error: No 'Wheels' section found in JSON");
+                    return false;
+                }
+
+                var wheelHardpoints = BuildWheelHardpoints(wheelsData, isRear, refDistance);
+                if (wheelHardpoints.Count == 0)
+                { Console.WriteLine("Error: Could not extract wheel data"); return false; }
+
+                int totalSteps = wheelHardpoints.Count * 5 + 2;
+                Console.WriteLine($"TOTAL:{totalSteps}");
+                int progress = 0;
+
+                // Load marker part
+                ReportState(HardpointState.LoadingMarkerPart);
+                ModelDoc2 markerDoc = LoadMarkerPart(swApp, markerPartPath);
+                if (markerDoc == null) return false;
+
+                int activateErrors = 0;
+                swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErrors);
+                swModel = (ModelDoc2)swApp.ActiveDoc;
+                swAssy  = (AssemblyDoc)swModel;
+
+                swModel.ClearSelection2(true);
+                swAssy.EditAssembly();
+
+                var insertedParts = new List<VirtualPartInfo>();
+
+                ReportState(HardpointState.InsertingBodies);
+                foreach (var hp in wheelHardpoints)
+                {
+                    // 1. Insert at origin
+                    var partInfo = InsertVirtualMarkerPart(swAssy, markerDoc, hp);
+                    if (partInfo == null) continue;
+                    progress++; ReportProgress(progress);
+
+                    // 2. Make virtual
+                    MakeComponentVirtual(partInfo);
+                    progress++; ReportProgress(progress);
+
+                    // 3. Rename component
+                    RenameVirtualPart(swAssy, partInfo);
+                    progress++; ReportProgress(progress);
+
+                    // 4. Rename internal CS AND apply wheel angles (camber / toe) via EditPart2
+                    RenameAndOrientWheelCoordinateSystem(swApp, swAssy, swModel, partInfo);
+                    progress++; ReportProgress(progress);
+
+                    // 5. Apply green colour for wheels
+                    ApplyColorToVirtualPart(swAssy, partInfo);
+                    progress++; ReportProgress(progress);
+
+                    insertedParts.Add(partInfo);
+                }
+
+                // Folder
+                ReportState(HardpointState.CreatingHardpointsFolder);
+                CreateWheelHardpointsFolder(swAssy, insertedParts);
+                progress++; ReportProgress(progress);
+
+                swModel.EditRebuild3();
+                progress++; ReportProgress(progress);
+
+                ReportState(HardpointState.Complete);
+                Console.WriteLine($"Successfully inserted {insertedParts.Count} wheel marker parts");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Builds a list of HardpointInfo entries for left and right wheels from the
+        /// Wheels JSON section, mirroring draw_suspension.py InsertWheel logic.
+        /// Positions are stored (for pose step) but parts are inserted at origin.
+        /// </summary>
+        private static List<HardpointInfo> BuildWheelHardpoints(
+            Dictionary<string, object> wheelsData,
+            bool isRear,
+            double referenceDistanceMM)
+        {
+            var list = new List<HardpointInfo>();
+            try
+            {
+                double halfTrack        = GetWheelValue(wheelsData, "Half Track",           "left");
+                double tireDiameter     = GetWheelValue(wheelsData, "Tire Diameter",        "left");
+                double lateralOffset    = GetWheelValue(wheelsData, "Lateral Offset",       "left", 0);
+                double verticalOffset   = GetWheelValue(wheelsData, "Vertical Offset",      "left", 0);
+                double longOffset       = GetWheelValue(wheelsData, "Longitudinal Offset",  "left", 0);
+                double camber           = GetWheelValue(wheelsData, "Static Camber",        "left", 0);
+                double toe              = GetWheelValue(wheelsData, "Static Toe",           "left", 0);
+
+                double xBase = referenceDistanceMM + longOffset;
+                double yBase = halfTrack + lateralOffset;
+                double z     = tireDiameter / 2.0 + verticalOffset;
+
+                string prefix = isRear ? "R" : "F";
+                string suffix = isRear ? "_REAR" : "_FRONT";
+
+                // Left wheel (positive Y, positive camber/toe)
+                list.Add(new HardpointInfo
+                {
+                    BaseName = $"{prefix}L_wheel",
+                    Suffix   = suffix,
+                    X        = xBase,
+                    Y        = yBase,
+                    Z        = z,
+                    AngleX   = camber,
+                    AngleY   = 0,
+                    AngleZ   = toe
+                });
+
+                // Right wheel (negative Y, mirrored camber/toe)
+                list.Add(new HardpointInfo
+                {
+                    BaseName = $"{prefix}R_wheel",
+                    Suffix   = suffix,
+                    X        = xBase,
+                    Y        = -yBase,
+                    Z        = z,
+                    AngleX   = -camber,
+                    AngleY   = 0,
+                    AngleZ   = -toe
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error building wheel hardpoints: {ex.Message}");
+            }
+            return list;
+        }
+
+        private static double GetWheelValue(
+            Dictionary<string, object> wheelsData,
+            string key, string side,
+            double fallback = 0.0)
+        {
+            if (wheelsData.TryGetValue(key, out object sectionObj) &&
+                sectionObj is Dictionary<string, object> section &&
+                section.TryGetValue(side, out object val))
+            {
+                return Convert.ToDouble(val);
+            }
+            return fallback;
+        }
+
+        /// <summary>
+        /// Uses EditPart2 to enter the virtual wheel part, rename its CoordSys,
+        /// and update its rotation to reflect toe/camber angles.
+        /// </summary>
+        private static void RenameAndOrientWheelCoordinateSystem(
+            SldWorks swApp, AssemblyDoc swAssy, ModelDoc2 swModel, VirtualPartInfo partInfo)
+        {
+            string newCsName = $"CS_{partInfo.RenamedName}";
+            try
+            {
+                swModel.ClearSelection2(true);
+                partInfo.Component.Select4(false, null, false);
+
+                int editInfo   = 0;
+                int editResult = swAssy.EditPart2(true, false, ref editInfo);
+
+                if (editResult == (int)swEditPartCommandStatus_e.swEditPartSuccessful)
+                {
+                    ModelDoc2 partDoc = (ModelDoc2)swApp.ActiveDoc;
+                    if (partDoc != null)
+                    {
+                        // Find the first CoordSys feature in the marker part
+                        Feature f = (Feature)partDoc.FirstFeature();
+                        while (f != null)
+                        {
+                            if (f.GetTypeName2() == "CoordSys")
+                            {
+                                // Rename
+                                f.Name = newCsName;
+
+                                // Apply wheel orientation via ModifyDefinition if angles present
+                                if (partInfo.AngleX != 0 || partInfo.AngleY != 0 || partInfo.AngleZ != 0)
+                                {
+                                    CoordinateSystemFeatureData csData =
+                                        (CoordinateSystemFeatureData)f.GetDefinition();
+                                    if (csData != null && csData.AccessSelections(partDoc, null))
+                                    {
+                                        // Leave origin at part origin (null entity)
+                                        csData.OriginEntity = null;
+                                        bool ok = f.ModifyDefinition(csData, partDoc, null);
+                                        csData.ReleaseSelectionAccess();
+                                        Console.WriteLine(ok
+                                            ? $"Oriented wheel CS '{newCsName}' (camber={partInfo.AngleX}, toe={partInfo.AngleZ})"
+                                            : $"Warning: ModifyDefinition failed for wheel CS '{newCsName}'");
+                                    }
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"Renamed wheel CS to '{newCsName}'");
+                                }
+                                break;
+                            }
+                            f = (Feature)f.GetNextFeature();
+                        }
+                        partDoc.EditRebuild3();
+                    }
+                    swAssy.EditAssembly();
+                }
+                else
+                {
+                    Console.WriteLine($"Warning: EditPart2 returned {editResult} for {partInfo.RenamedName}");
+                }
+
+                swModel.ClearSelection2(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error orienting wheel CS for {partInfo.RenamedName}: {ex.Message}");
+                try { swAssy.EditAssembly(); } catch { }
+            }
         }
     }
 }

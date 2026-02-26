@@ -63,6 +63,15 @@ namespace sw_drawer
                                 }
                                 success = HardpointRunner.RunPose(args);
                                 break;
+                            case "addwheels":
+                                if (args.Length < 4)
+                                {
+                                    Console.WriteLine("Usage: hardpoints addwheels <jsonPath> <markerPartPath> [front|rear] [referenceDistanceMM]");
+                                    PrintUsage();
+                                    return 1;
+                                }
+                                success = HardpointRunner.RunAddWheels(args);
+                                break;
                             default:
                                 Console.WriteLine($"Unknown hardpoints command: {subCommand}");
                                 PrintUsage();
