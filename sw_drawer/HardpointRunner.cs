@@ -15,20 +15,11 @@ namespace sw_drawer
         private static readonly Dictionary<string, int[]> ColorMap = new Dictionary<string, int[]>
         {
             { "CHAS_", new[] { 255, 0, 0 } },       // Red - Chassis
+            { "wheel", new[] { 0, 255, 0 } },       // Green - Wheels
             { "UPRI_", new[] { 0, 0, 255 } },       // Blue - Upright
-            { "ROCK_", new[] { 0, 128, 255 } },     // Light Blue - Rocker
-            { "NSMA_", new[] { 255, 192, 203 } },   // Pink - Non-Sprung Mass
-            { "PUSH_", new[] { 0, 255, 0 } },       // Green - Pushrod
-            { "TIER_", new[] { 255, 165, 0 } },     // Orange - Tie Rod
-            { "DAMP_", new[] { 128, 0, 128 } },     // Purple - Damper
-            { "ARBA_", new[] { 255, 255, 0 } },     // Yellow - ARB
-            { "_FRONT", new[] { 0, 200, 200 } },    // Cyan - Front (fallback)
-            { "_REAR", new[] { 200, 100, 0 } },     // Brown - Rear (fallback)
-            { "wheel", new[] { 64, 64, 64 } },      // Dark Gray - Wheels
-            { "Other", new[] { 128, 128, 128 } },   // Gray - Other components
         };
 
-        private static readonly int[] DefaultColor = new[] { 128, 128, 128 }; // Gray default
+        private static readonly int[] DefaultColor = new[] { 128, 0, 128 }; // Purple for other components
 
         private static void ReportState(HardpointState state)
         {
@@ -79,13 +70,7 @@ namespace sw_drawer
 
             AssemblyDoc swAssy = (AssemblyDoc)swModel;
 
-            // Validate files exist
-            if (!File.Exists(jsonPath))
-            {
-                Console.WriteLine($"Error: JSON file not found at {jsonPath}");
-                return false;
-            }
-
+            // Validate marker file exists
             if (!File.Exists(markerPartPath))
             {
                 Console.WriteLine($"Error: Marker part not found at {markerPartPath}");
@@ -94,22 +79,39 @@ namespace sw_drawer
 
             try
             {
-                // Load JSON data
+                // Load JSON data from both Front and Rear suspension files
                 ReportState(HardpointState.LoadingJson);
-                var jsonData = LoadJsonData(jsonPath);
-                var hardpoints = ExtractHardpoints(jsonData);
                 
-                // Precompute total steps
-                int totalSteps = 0;
-                totalSteps += hardpoints.Count; // Inserting virtual parts
-                totalSteps += hardpoints.Count; // Renaming virtual parts
-                totalSteps += hardpoints.Count; // Renaming coordinate systems
-                totalSteps += hardpoints.Count; // Applying colors
-                totalSteps += hardpoints.Count; // Creating initial coordinate systems
-                totalSteps += hardpoints.Count; // Creating mates
-                totalSteps += 1; // Creating Hardpoints folder
-                totalSteps += 1; // Rebuilding
+                string frontJsonPath = Path.Combine(Path.GetDirectoryName(jsonPath), "Front_Suspension.json");
+                string rearJsonPath = Path.Combine(Path.GetDirectoryName(jsonPath), "Rear_Suspension.json");
                 
+                var hardpoints = new List<HardpointInfo>();
+                
+                // Load front suspension
+                if (File.Exists(frontJsonPath))
+                {
+                    var frontData = LoadJsonData(frontJsonPath);
+                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints);
+                    Console.WriteLine($"Loaded {hardpoints.Count} hardpoints from Front_Suspension.json");
+                }
+                
+                // Load rear suspension
+                int frontCount = hardpoints.Count;
+                if (File.Exists(rearJsonPath))
+                {
+                    var rearData = LoadJsonData(rearJsonPath);
+                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints);
+                    Console.WriteLine($"Loaded {hardpoints.Count - frontCount} hardpoints from Rear_Suspension.json");
+                }
+                
+                if (hardpoints.Count == 0)
+                {
+                    Console.WriteLine("Error: No hardpoints found in JSON files");
+                    return false;
+                }
+                
+                // Precompute total steps (insert + make virtual + rename + rename CS + color + folder + rebuild)
+                int totalSteps = hardpoints.Count * 5 + 2;
                 Console.WriteLine($"TOTAL:{totalSteps}");
                 int progressCount = 0;
 
@@ -129,67 +131,51 @@ namespace sw_drawer
                 // Start insertion process
                 swModel.ClearSelection2(true);
                 swAssy.EditAssembly();
-                swModel.ForceRebuild3(false);
 
                 var insertedParts = new List<VirtualPartInfo>();
                 
+                // Insert all components and immediately process each one
                 ReportState(HardpointState.InsertingBodies);
                 foreach (var hardpoint in hardpoints)
                 {
+                    // Step 1: Insert component
                     var partInfo = InsertVirtualMarkerPart(swAssy, markerDoc, hardpoint);
                     if (partInfo != null)
                     {
+                        progressCount++;
+                        ReportProgress(progressCount);
+                        
+                        // Step 2: Make virtual immediately
+                        MakeComponentVirtual(partInfo);
+                        progressCount++;
+                        ReportProgress(progressCount);
+                        
+                        // Step 3: Rename immediately
+                        RenameVirtualPart(swAssy, partInfo);
+                        progressCount++;
+                        ReportProgress(progressCount);
+                        
+                        // Step 4: Rename internal coordinate system
+                        RenameInternalCoordinateSystem(swModel, partInfo);
+                        progressCount++;
+                        ReportProgress(progressCount);
+                        
+                        // Step 5: Apply color
+                        ApplyColorToVirtualPart(swAssy, partInfo);
+                        progressCount++;
+                        ReportProgress(progressCount);
+                        
                         insertedParts.Add(partInfo);
                     }
-                    progressCount++;
-                    ReportProgress(progressCount);
                 }
 
-                ReportState(HardpointState.RenamingBodies);
-                foreach (var partInfo in insertedParts)
-                {
-                    RenameVirtualPart(swAssy, partInfo);
-                    progressCount++;
-                    ReportProgress(progressCount);
-                }
-
-                ReportState(HardpointState.CreatingCoordinateSystems);
-                foreach (var partInfo in insertedParts)
-                {
-                    RenameEmbeddedCoordinateSystem(swModel, partInfo);
-                    progressCount++;
-                    ReportProgress(progressCount);
-                }
-
-                ReportState(HardpointState.ApplyingColors);
-                foreach (var partInfo in insertedParts)
-                {
-                    ApplyColorToVirtualPart(swAssy, partInfo);
-                    progressCount++;
-                    ReportProgress(progressCount);
-                }
-
-                ReportState(HardpointState.CreatingCoordinateSystems);
-                foreach (var partInfo in insertedParts)
-                {
-                    CreateInitialCoordinateSystem(swModel, partInfo, "Default");
-                    progressCount++;
-                    ReportProgress(progressCount);
-                }
-
-                ReportState(HardpointState.CreatingCoordinateSystems);
-                foreach (var partInfo in insertedParts)
-                {
-                    CreateMateToCoordinateSystem(swModel, swAssy, partInfo);
-                    progressCount++;
-                    ReportProgress(progressCount);
-                }
-
+                // Step 6: Create Hardpoints folder
                 ReportState(HardpointState.CreatingHardpointsFolder);
                 CreateHardpointsFolder(swAssy, insertedParts);
                 progressCount++;
                 ReportProgress(progressCount);
 
+                // Step 7: Rebuild
                 swModel.EditRebuild3();
                 progressCount++;
                 ReportProgress(progressCount);
@@ -201,6 +187,7 @@ namespace sw_drawer
             catch (Exception ex)
             {
                 Console.WriteLine($"Error: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
                 return false;
             }
         }
@@ -1046,6 +1033,64 @@ namespace sw_drawer
             }
         }
 
+        private static void ExtractHardpointsWithSuffix(Dictionary<string, object> jsonData, string suffix, List<HardpointInfo> hardpoints)
+        {
+            // Extract from all sections except Wheels
+            foreach (var section in jsonData)
+            {
+                if (section.Key == "Wheels")
+                {
+                    continue; // Wheels handled separately if needed
+                }
+                else
+                {
+                    // This is a suspension section (e.g., "Double A-Arm", "Push Pull")
+                    Dictionary<string, object> sectionObj = section.Value as Dictionary<string, object>;
+                    if (sectionObj != null)
+                    {
+                        foreach (var pointProperty in sectionObj)
+                        {
+                            string pointName = pointProperty.Key;
+                            List<object> coords = pointProperty.Value as List<object>;
+                            if (coords != null && coords.Count >= 3)
+                            {
+                                hardpoints.Add(new HardpointInfo
+                                {
+                                    BaseName = pointName,
+                                    Suffix = suffix,
+                                    X = Convert.ToDouble(coords[0]),
+                                    Y = Convert.ToDouble(coords[1]),
+                                    Z = Convert.ToDouble(coords[2])
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void MakeComponentVirtual(VirtualPartInfo partInfo)
+        {
+            try
+            {
+                // Make the component virtual using MakeVirtual2
+                // Parameter: deleteExternalFile (false = keep the file reference but make virtual)
+                bool success = partInfo.Component.MakeVirtual2(false);
+                if (success)
+                {
+                    Console.WriteLine($"Made component virtual: {partInfo.Component.Name2}");
+                }
+                else
+                {
+                    Console.WriteLine($"Warning: Failed to make component virtual: {partInfo.Component.Name2}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error making component virtual: {ex.Message}");
+            }
+        }
+
         private static void RenameVirtualPart(AssemblyDoc swAssy, VirtualPartInfo partInfo)
         {
             try
@@ -1058,6 +1103,42 @@ namespace sw_drawer
             catch (Exception ex)
             {
                 Console.WriteLine($"Error renaming virtual part: {ex.Message}");
+            }
+        }
+
+        private static void RenameInternalCoordinateSystem(ModelDoc2 swModel, VirtualPartInfo partInfo)
+        {
+            try
+            {
+                // The internal coordinate system in Marker.SLDPRT is called "Coordinate System1"
+                // We need to rename it in the context of this virtual component
+                string oldCsName = "Coordinate System1@" + partInfo.RenamedName;
+                string newCsName = $"CS_{partInfo.RenamedName}";
+                
+                // Try to select and rename the coordinate system feature
+                bool selected = swModel.Extension.SelectByID2(
+                    oldCsName, "COORDSYS", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                
+                if (selected)
+                {
+                    SelectionMgr selMgr = (SelectionMgr)swModel.SelectionManager;
+                    Feature feat = (Feature)selMgr.GetSelectedObject6(1, -1);
+                    if (feat != null)
+                    {
+                        feat.Name = newCsName;
+                        Console.WriteLine($"Renamed internal coordinate system to: {newCsName}");
+                    }
+                    swModel.ClearSelection2(true);
+                }
+                else
+                {
+                    Console.WriteLine($"Warning: Could not find internal coordinate system for {partInfo.RenamedName}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error renaming internal coordinate system: {ex.Message}");
             }
         }
 
@@ -1243,12 +1324,24 @@ namespace sw_drawer
                 ModelDoc2 swModel = (ModelDoc2)swAssy;
                 FeatureManager featMgr = swModel.FeatureManager;
                 
-                // Select all the virtual parts to group them
+                // Select all the virtual parts to group them using SelectByID2
                 swModel.ClearSelection2(true);
+                int selectedCount = 0;
                 foreach (var partInfo in parts)
                 {
-                    partInfo.Component.Select4(false, null, false);
+                    // Select component by name in assembly
+                    string compName = partInfo.RenamedName + "@" + swModel.GetTitle();
+                    bool selected = swModel.Extension.SelectByID2(
+                        compName, "COMPONENT", 0, 0, 0, true, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    
+                    if (selected)
+                    {
+                        selectedCount++;
+                    }
                 }
+
+                Console.WriteLine($"Selected {selectedCount} components for folder");
 
                 // Create feature folder
                 Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
