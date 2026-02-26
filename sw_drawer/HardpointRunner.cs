@@ -114,8 +114,8 @@ namespace sw_drawer
                     return false;
                 }
                 
-                // Precompute total steps (insert + make virtual + rename + rename CS + color + folder + rebuild)
-                int totalSteps = hardpoints.Count * 5 + 2;
+                // Precompute total steps (insert + make virtual + rename + float + rename CS + color + folder + rebuild)
+                int totalSteps = hardpoints.Count * 6 + 2;
                 Console.WriteLine($"TOTAL:{totalSteps}");
                 int progressCount = 0;
 
@@ -159,12 +159,17 @@ namespace sw_drawer
                         progressCount++;
                         ReportProgress(progressCount);
                         
-                        // Step 4: Rename internal coordinate system using EditPart2
+                        // Step 4: Float the component in the assembly (unfix)
+                        FloatComponent(swAssy, swModel, partInfo);
+                        progressCount++;
+                        ReportProgress(progressCount);
+
+                        // Step 5: Rename internal coordinate system using EditPart2
                         RenameInternalCoordinateSystem(swApp, swAssy, swModel, partInfo);
                         progressCount++;
                         ReportProgress(progressCount);
                         
-                        // Step 5: Apply color
+                        // Step 6: Apply color
                         ApplyColorToVirtualPart(swAssy, partInfo);
                         progressCount++;
                         ReportProgress(progressCount);
@@ -1171,13 +1176,61 @@ namespace sw_drawer
             }
         }
 
+        private static void FloatComponent(AssemblyDoc swAssy, ModelDoc2 swModel, VirtualPartInfo partInfo)
+        {
+            try
+            {
+                if (swAssy == null || swModel == null || partInfo?.Component == null)
+                {
+                    Console.WriteLine("Warning: Cannot float component because assembly/model/component is null");
+                    return;
+                }
+
+                swModel.ClearSelection2(true);
+                bool selected = partInfo.Component.Select4(false, null, false);
+
+                // Fallback selection by name if direct component selection fails
+                if (!selected)
+                {
+                    string assyTitle = swModel.GetTitle();
+                    string compName = partInfo.Component.Name2;
+                    selected = swModel.Extension.SelectByID2(
+                        $"{compName}@{assyTitle}",
+                        "COMPONENT",
+                        0, 0, 0,
+                        false,
+                        0,
+                        null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                }
+
+                if (!selected)
+                {
+                    Console.WriteLine($"Warning: Could not select component to float: {partInfo.RenamedName}");
+                    swModel.ClearSelection2(true);
+                    return;
+                }
+
+                swAssy.UnfixComponent();
+                Console.WriteLine($"Floated component: {partInfo.RenamedName}");
+                swModel.ClearSelection2(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error floating component {partInfo?.RenamedName}: {ex.Message}");
+                try { swModel?.ClearSelection2(true); } catch { }
+            }
+        }
+
         /// <summary>
         /// Renames the coordinate system inside a virtual marker part using EditPart2.
         /// EditPart2 enters in-context editing of the selected virtual component.
         /// </summary>
         private static void RenameInternalCoordinateSystem(SldWorks swApp, AssemblyDoc swAssy, ModelDoc2 swModel, VirtualPartInfo partInfo)
         {
-            string newCsName = $"CS_{partInfo.RenamedName}";
+            string newCsName = string.IsNullOrWhiteSpace(partInfo.RenamedName)
+                ? $"{partInfo.BaseName}{partInfo.Suffix}"
+                : partInfo.RenamedName;
             try
             {
                 // Select the virtual component
@@ -1191,22 +1244,33 @@ namespace sw_drawer
 
                 if (editResult == (int)swEditPartCommandStatus_e.swEditPartSuccessful)
                 {
-                    // Active doc is now the virtual part document
-                    ModelDoc2 partDoc = (ModelDoc2)swApp.ActiveDoc;
+                    // Prefer the component's part document (reliable in in-context editing)
+                    ModelDoc2 partDoc = (ModelDoc2)partInfo.Component.GetModelDoc2();
+                    if (partDoc == null)
+                    {
+                        partDoc = (ModelDoc2)swApp.ActiveDoc;
+                    }
+
                     if (partDoc != null)
                     {
-                        // Walk features to find the first CoordSys
-                        Feature f = (Feature)partDoc.FirstFeature();
-                        while (f != null)
+                        bool renamed = false;
+                        Feature defaultCs = GetInternalCoordinateSystemFeature(partDoc);
+                        if (defaultCs != null && defaultCs.GetTypeName2() == "CoordSys")
                         {
-                            if (f.GetTypeName2() == "CoordSys")
-                            {
-                                f.Name = newCsName;
-                                Console.WriteLine($"Renamed internal coordinate system to: {newCsName}");
-                                break;
-                            }
-                            f = (Feature)f.GetNextFeature();
+                            defaultCs.Name = newCsName;
+                            renamed = true;
                         }
+
+                        if (renamed)
+                        {
+                            Console.WriteLine($"Renamed internal coordinate system to: {newCsName}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Warning: Could not find internal coordinate system to rename for {partInfo.RenamedName}");
+                        }
+
+                        partDoc.EditRebuild3();
                     }
                     // Exit in-context editing, return to assembly
                     swAssy.EditAssembly();
@@ -1837,7 +1901,7 @@ namespace sw_drawer
                 if (wheelHardpoints.Count == 0)
                 { Console.WriteLine("Error: Could not extract wheel data"); return false; }
 
-                int totalSteps = wheelHardpoints.Count * 5 + 2;
+                int totalSteps = wheelHardpoints.Count * 6 + 2;
                 Console.WriteLine($"TOTAL:{totalSteps}");
                 int progress = 0;
 
@@ -1872,11 +1936,15 @@ namespace sw_drawer
                     RenameVirtualPart(swAssy, partInfo);
                     progress++; ReportProgress(progress);
 
-                    // 4. Rename internal CS AND apply wheel angles (camber / toe) via EditPart2
+                    // 4. Float the component in the assembly (unfix)
+                    FloatComponent(swAssy, swModel, partInfo);
+                    progress++; ReportProgress(progress);
+
+                    // 5. Rename internal CS AND apply wheel angles (camber / toe) via EditPart2
                     RenameAndOrientWheelCoordinateSystem(swApp, swAssy, swModel, partInfo);
                     progress++; ReportProgress(progress);
 
-                    // 5. Apply green colour for wheels
+                    // 6. Apply green colour for wheels
                     ApplyColorToVirtualPart(swAssy, partInfo);
                     progress++; ReportProgress(progress);
 
@@ -2152,7 +2220,9 @@ namespace sw_drawer
         private static void RenameAndOrientWheelCoordinateSystem(
             SldWorks swApp, AssemblyDoc swAssy, ModelDoc2 swModel, VirtualPartInfo partInfo)
         {
-            string newCsName = $"CS_{partInfo.RenamedName}";
+            string newCsName = string.IsNullOrWhiteSpace(partInfo.RenamedName)
+                ? $"{partInfo.BaseName}{partInfo.Suffix}"
+                : partInfo.RenamedName;
             try
             {
                 swModel.ClearSelection2(true);
@@ -2163,42 +2233,47 @@ namespace sw_drawer
 
                 if (editResult == (int)swEditPartCommandStatus_e.swEditPartSuccessful)
                 {
-                    ModelDoc2 partDoc = (ModelDoc2)swApp.ActiveDoc;
+                    ModelDoc2 partDoc = (ModelDoc2)partInfo.Component.GetModelDoc2();
+                    if (partDoc == null)
+                    {
+                        partDoc = (ModelDoc2)swApp.ActiveDoc;
+                    }
+
                     if (partDoc != null)
                     {
-                        // Find the first CoordSys feature in the marker part
-                        Feature f = (Feature)partDoc.FirstFeature();
-                        while (f != null)
-                        {
-                            if (f.GetTypeName2() == "CoordSys")
-                            {
-                                // Rename
-                                f.Name = newCsName;
+                        Feature targetCs = GetInternalCoordinateSystemFeature(partDoc);
 
-                                // Apply wheel orientation via ModifyDefinition if angles present
-                                if (partInfo.AngleX != 0 || partInfo.AngleY != 0 || partInfo.AngleZ != 0)
+                        if (targetCs != null && targetCs.GetTypeName2() == "CoordSys")
+                        {
+                            // Rename to exactly hardpoint name
+                            targetCs.Name = newCsName;
+
+                            // Apply wheel orientation via ModifyDefinition if angles present
+                            if (partInfo.AngleX != 0 || partInfo.AngleY != 0 || partInfo.AngleZ != 0)
+                            {
+                                CoordinateSystemFeatureData csData =
+                                    (CoordinateSystemFeatureData)targetCs.GetDefinition();
+                                if (csData != null && csData.AccessSelections(partDoc, null))
                                 {
-                                    CoordinateSystemFeatureData csData =
-                                        (CoordinateSystemFeatureData)f.GetDefinition();
-                                    if (csData != null && csData.AccessSelections(partDoc, null))
-                                    {
-                                        // Leave origin at part origin (null entity)
-                                        csData.OriginEntity = null;
-                                        bool ok = f.ModifyDefinition(csData, partDoc, null);
-                                        csData.ReleaseSelectionAccess();
-                                        Console.WriteLine(ok
-                                            ? $"Oriented wheel CS '{newCsName}' (camber={partInfo.AngleX}, toe={partInfo.AngleZ})"
-                                            : $"Warning: ModifyDefinition failed for wheel CS '{newCsName}'");
-                                    }
+                                    // Leave origin at part origin (null entity)
+                                    csData.OriginEntity = null;
+                                    bool ok = targetCs.ModifyDefinition(csData, partDoc, null);
+                                    csData.ReleaseSelectionAccess();
+                                    Console.WriteLine(ok
+                                        ? $"Renamed/oriented wheel CS '{newCsName}' (camber={partInfo.AngleX}, toe={partInfo.AngleZ})"
+                                        : $"Warning: ModifyDefinition failed for wheel CS '{newCsName}'");
                                 }
-                                else
-                                {
-                                    Console.WriteLine($"Renamed wheel CS to '{newCsName}'");
-                                }
-                                break;
                             }
-                            f = (Feature)f.GetNextFeature();
+                            else
+                            {
+                                Console.WriteLine($"Renamed wheel CS to '{newCsName}'");
+                            }
                         }
+                        else
+                        {
+                            Console.WriteLine($"Warning: Could not find wheel coordinate system to rename for {partInfo.RenamedName}");
+                        }
+
                         partDoc.EditRebuild3();
                     }
                     swAssy.EditAssembly();
@@ -2215,6 +2290,123 @@ namespace sw_drawer
                 Console.WriteLine($"Error orienting wheel CS for {partInfo.RenamedName}: {ex.Message}");
                 try { swAssy.EditAssembly(); } catch { }
             }
+        }
+
+        private static Feature GetInternalCoordinateSystemFeature(ModelDoc2 partDoc)
+        {
+            if (partDoc == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Best case: default marker coordinate system name
+                PartDoc partDocAsPart = partDoc as PartDoc;
+                Feature byDefaultName = partDocAsPart != null
+                    ? (Feature)partDocAsPart.FeatureByName("Coordinate System1")
+                    : null;
+                if (byDefaultName != null && IsCoordinateSystemFeature(byDefaultName))
+                {
+                    return byDefaultName;
+                }
+            }
+            catch { }
+
+            try
+            {
+                // Selection-based fallback by name
+                bool selected = partDoc.Extension.SelectByID2(
+                    "Coordinate System1",
+                    "COORDSYS",
+                    0, 0, 0,
+                    false,
+                    0,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (selected)
+                {
+                    SelectionMgr selMgr = (SelectionMgr)partDoc.SelectionManager;
+                    Feature selectedFeature = (Feature)selMgr.GetSelectedObject6(1, -1);
+                    partDoc.ClearSelection2(true);
+                    if (selectedFeature != null && IsCoordinateSystemFeature(selectedFeature))
+                    {
+                        return selectedFeature;
+                    }
+                }
+            }
+            catch
+            {
+                try { partDoc.ClearSelection2(true); } catch { }
+            }
+
+            // Last fallback: traverse full feature tree including subfeatures
+            return FindFirstCoordinateSystemFeature(partDoc);
+        }
+
+        private static Feature FindFirstCoordinateSystemFeature(ModelDoc2 partDoc)
+        {
+            Feature feat = (Feature)partDoc.FirstFeature();
+            while (feat != null)
+            {
+                if (IsCoordinateSystemFeature(feat))
+                {
+                    return feat;
+                }
+
+                Feature inSub = FindCoordinateSystemInSubFeatures((Feature)feat.GetFirstSubFeature());
+                if (inSub != null)
+                {
+                    return inSub;
+                }
+
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            return null;
+        }
+
+        private static Feature FindCoordinateSystemInSubFeatures(Feature subFeature)
+        {
+            Feature current = subFeature;
+            while (current != null)
+            {
+                if (IsCoordinateSystemFeature(current))
+                {
+                    return current;
+                }
+
+                Feature nested = FindCoordinateSystemInSubFeatures((Feature)current.GetFirstSubFeature());
+                if (nested != null)
+                {
+                    return nested;
+                }
+
+                current = (Feature)current.GetNextSubFeature();
+            }
+
+            return null;
+        }
+
+        private static bool IsCoordinateSystemFeature(Feature feature)
+        {
+            if (feature == null)
+            {
+                return false;
+            }
+
+            string typeName = string.Empty;
+            try
+            {
+                typeName = feature.GetTypeName2();
+            }
+            catch
+            {
+                return false;
+            }
+
+            return string.Equals(typeName, "CoordSys", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
