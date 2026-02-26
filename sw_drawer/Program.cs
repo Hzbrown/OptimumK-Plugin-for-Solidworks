@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Runtime.InteropServices;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -30,6 +31,43 @@ namespace sw_drawer
 
                     case "vis":
                         success = RunVisibilityCommand(args);
+                        break;
+
+                    case "hardpoints":
+                        if (args.Length < 2)
+                        {
+                            Console.WriteLine("Usage: hardpoints <add|pose> [args]");
+                            PrintUsage();
+                            return 1;
+                        }
+                        
+                        string subCommand = args[1].ToLowerInvariant();
+                        
+                        switch (subCommand)
+                        {
+                            case "add":
+                                if (args.Length < 4)
+                                {
+                                    Console.WriteLine("Usage: hardpoints add <jsonPath> <markerPartPath>");
+                                    PrintUsage();
+                                    return 1;
+                                }
+                                success = HardpointRunner.RunAdd(args);
+                                break;
+                            case "pose":
+                                if (args.Length < 4)
+                                {
+                                    Console.WriteLine("Usage: hardpoints pose <jsonPath> <configName>");
+                                    PrintUsage();
+                                    return 1;
+                                }
+                                success = HardpointRunner.RunPose(args);
+                                break;
+                            default:
+                                Console.WriteLine($"Unknown hardpoints command: {subCommand}");
+                                PrintUsage();
+                                return 1;
+                        }
                         break;
 
                     default:

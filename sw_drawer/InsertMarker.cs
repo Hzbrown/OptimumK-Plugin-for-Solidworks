@@ -221,7 +221,7 @@ namespace sw_drawer
             int existingCount = 0;
             foreach (var csInfo in coordSystems)
             {
-                string markerName = csInfo.Name + "_Marker";
+                            string markerName = csInfo.Name;
                 if (ComponentExists(swAssy, markerName))
                     existingCount++;
                 else
