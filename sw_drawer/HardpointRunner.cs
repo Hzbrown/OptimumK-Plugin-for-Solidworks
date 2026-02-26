@@ -1382,28 +1382,18 @@ namespace sw_drawer
                     return;
                 }
 
-                bool compOriginSelected = SelectComponentOriginForMate(swModel, comp, 2);
-                if (!compOriginSelected && !string.IsNullOrWhiteSpace(componentCoordName))
-                {
-                    // Fallback to component coordinate system name if origin selection fails.
-                    compOriginSelected = swModel.Extension.SelectByID2(
-                        componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
-                        "COORDSYS",
-                        0, 0, 0,
-                        true,
-                        2,
-                        null,
-                        (int)swSelectOption_e.swSelectOptionDefault);
+                bool compCsSelected = swModel.Extension.SelectByID2(
+                    componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
+                    "COORDSYS",
+                    0, 0, 0,
+                    true,
+                    2,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
 
-                    if (compOriginSelected)
-                    {
-                        Console.WriteLine($"Note: Fallback to component CSys '{componentCoordName}' for '{comp.Name2}'");
-                    }
-                }
-
-                if (!compOriginSelected)
+                if (!compCsSelected)
                 {
-                    Console.WriteLine($"Warning: Could not select hardpoint origin for '{comp.Name2}'");
+                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
                     swModel.ClearSelection2(true);
                     return;
                 }
@@ -1421,21 +1411,22 @@ namespace sw_drawer
 
                 if (mate == null || mateError != 0)
                 {
-                    Console.WriteLine($"Warning: Could not create mate for '{comp.Name2}' to '{poseCoordName}' (error {mateError})");
+                    // Intentionally silent on mate failure here.
                 }
                 else
                 {
+                    Feature mateFeature = (Feature)swModel.FeatureByPositionReverse(0);
+
                     // Scope mate to active configuration only (best effort).
-                    Feature mateFeat = (Feature)swModel.FeatureByPositionReverse(0);
-                    if (mateFeat != null)
+                    if (mateFeature != null)
                     {
-                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeat);
+                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
                         if (axisAligned)
                         {
                             Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
                         }
 
-                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeat, activeConfigName);
+                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeature, activeConfigName);
                     }
                 }
 

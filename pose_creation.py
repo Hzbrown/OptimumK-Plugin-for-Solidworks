@@ -109,35 +109,34 @@ def get_suspension_tools_exe():
     """Get the path to SuspensionTools.exe"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Check multiple possible locations
+    # Prefer net48 SuspensionTools build used by the current solution.
+    # Keep sw_drawer.exe as fallback for legacy setups.
     paths_to_check = [
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net6.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net6.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net8.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net8.0", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Release", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Debug", "sw_drawer.exe"),
     ]
-    
+
     for path in paths_to_check:
         if os.path.exists(path):
             return path
     
     raise FileNotFoundError(
-        "sw_drawer.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"
+        "SuspensionTools.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"
         f"Searched in: {paths_to_check[0]}"
     )
 
 
-def create_pose(json_path, pose_name, worker=None, progress_callback=None):
-    """Create pose from JSON file with coordinate systems and mates."""
+def insert_pose(json_path, pose_name, worker=None, progress_callback=None):
+    """Insert pose CSys/mates from JSON file into active SolidWorks configuration."""
     if not os.path.exists(json_path):
         raise FileNotFoundError(f"JSON file not found at {json_path}")
     
     exe_path = get_suspension_tools_exe()
-    args = [exe_path, "hardpoints", "pose", json_path, pose_name]
+    args = [exe_path, "hardpoints", "insertpose", json_path, pose_name]
     
     print(f"Running: {' '.join(args)}")
     
@@ -169,6 +168,11 @@ def create_pose(json_path, pose_name, worker=None, progress_callback=None):
     
     process.wait()
     return process.returncode == 0
+
+
+def create_pose(json_path, pose_name, worker=None, progress_callback=None):
+    """Backward-compatible alias for insert_pose."""
+    return insert_pose(json_path, pose_name, worker=worker, progress_callback=progress_callback)
 
 
 def load_json(file_path):

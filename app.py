@@ -11,7 +11,7 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView
 
 sys.path.insert(0, os.path.dirname(__file__))
 from coordinate_insertion import CoordinateInsertionWorker, insert_coordinates, validate_files, get_marker_path, create_coordinates_folder
-from pose_creation import PoseCreationWorker, create_pose, validate_pose_name, get_existing_poses
+from pose_creation import PoseCreationWorker, insert_pose, validate_pose_name, get_existing_poses
 from visualization_control import VisualizationWorker, set_suspension_visibility, set_marker_visibility, get_visualization_controls, get_color_coding_info
 from optimumSheetParser import OptimumSheetParser
 from test_solidworks_connection import get_active_document_name
@@ -1337,41 +1337,22 @@ class PoseCreationTab(QWidget):
         
         layout.addLayout(h_progress)
         
-        # Pose name input
-        group_config = QGroupBox("Configuration")
-        h_config = QHBoxLayout()
+        # Pose name + run (side-by-side)
+        group_run = QGroupBox("Insert Pose")
+        h_run = QHBoxLayout()
 
-        # Pose name input with validation
-        h_config.addWidget(QLabel("Pose Name:"))
+        h_run.addWidget(QLabel("Pose Name:"))
         self.pose_name = QLineEdit()
         self.pose_name.setPlaceholderText("Front, Rear, Test...")
         self.pose_name.setToolTip("Enter pose name without special characters")
-        h_config.addWidget(self.pose_name)
+        h_run.addWidget(self.pose_name)
 
-        # Transform folder suffix
-        h_config.addWidget(QLabel("Transform Folder:"))
-        self.transform_suffix = QLineEdit()
-        self.transform_suffix.setText(" Transforms")
-        self.transform_suffix.setEnabled(False)
-        h_config.addWidget(self.transform_suffix)
-
-        group_config.setLayout(h_config)
-        layout.addWidget(group_config)
-        
-        # Operations
-        group_ops = QGroupBox("Operations")
-        h_ops = QHBoxLayout()
-        
-        self.btn_create_pose = QPushButton("Create Pose")
+        self.btn_create_pose = QPushButton("Run")
         self.btn_create_pose.clicked.connect(self.create_pose)
-        h_ops.addWidget(self.btn_create_pose)
-        
-        self.btn_create_transforms_folder = QPushButton("Create Transforms Folder")
-        self.btn_create_transforms_folder.clicked.connect(self.create_transforms_folder)
-        h_ops.addWidget(self.btn_create_transforms_folder)
-        
-        group_ops.setLayout(h_ops)
-        layout.addWidget(group_ops)
+        h_run.addWidget(self.btn_create_pose)
+
+        group_run.setLayout(h_run)
+        layout.addWidget(group_run)
         
         # Existing poses
         group_poses = QGroupBox("Existing Poses")
@@ -1409,7 +1390,6 @@ class PoseCreationTab(QWidget):
     def set_buttons_enabled(self, enabled):
         """Enable or disable all action buttons."""
         self.btn_create_pose.setEnabled(enabled)
-        self.btn_create_transforms_folder.setEnabled(enabled)
     
     def on_progress(self, current, total):
         """Update progress bar with current/total values."""
@@ -1470,10 +1450,10 @@ class PoseCreationTab(QWidget):
             self.json_path.setText(file_path)
     
     def create_pose(self):
-        """Create pose using pose creation module."""
-        json_path = self.json_path.text().strip()
+        """Insert pose using latest parsed temp JSON files."""
+        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
+        rear_json_path = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
         pose_name = self.pose_name.text().strip()
-        transform_folder = f"{pose_name}{self.transform_suffix.text().strip()}"
 
         if not pose_name:
             QMessageBox.warning(self, "Warning", "Pose name cannot be empty")
@@ -1484,24 +1464,23 @@ class PoseCreationTab(QWidget):
                 "Pose name can only contain letters, numbers, spaces, hyphens and underscores")
             return
         
-        if not json_path or not pose_name:
-            QMessageBox.warning(self, "Warning", "Please select JSON file and enter pose name")
-            return
-        
         # Validate pose name
         valid, message = validate_pose_name(pose_name)
         if not valid:
             QMessageBox.warning(self, "Invalid Pose Name", message)
             return
         
-        # Validate file
+        # Validate required temp files
         if not os.path.exists(json_path):
-            QMessageBox.warning(self, "Warning", f"JSON file not found: {json_path}")
+            QMessageBox.warning(self, "Missing File", "Front_Suspension.json not found in /temp. Parse an Excel file first.")
+            return
+        if not os.path.exists(rear_json_path):
+            QMessageBox.warning(self, "Missing File", "Rear_Suspension.json not found in /temp. Parse an Excel file first.")
             return
         
-        self.start_loading(f"Creating pose '{pose_name}' from {os.path.basename(json_path)}...")
+        self.start_loading(f"Inserting pose '{pose_name}' from temp suspension files...")
         
-        self.worker = PoseCreationWorker(create_pose, json_path, pose_name)
+        self.worker = PoseCreationWorker(insert_pose, json_path, pose_name)
         self.worker.log.connect(self.append_log)
         self.worker.progress.connect(self.on_progress)
         self.worker.state_changed.connect(self.on_state_changed)
