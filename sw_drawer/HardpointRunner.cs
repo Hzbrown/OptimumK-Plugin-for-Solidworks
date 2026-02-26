@@ -173,9 +173,12 @@ namespace sw_drawer
                     }
                 }
 
-                // Step 6: Create Hardpoints folder
+                // Step 6: Create folder and move all parts at once
                 ReportState(HardpointState.CreatingHardpointsFolder);
-                CreateHardpointsFolder(swAssy, insertedParts);
+                if (insertedParts.Count > 0)
+                {
+                    CreateContainingFolderFromComponents(swModel, "Hardpoints", insertedParts);
+                }
                 progressCount++;
                 ReportProgress(progressCount);
 
@@ -1406,31 +1409,51 @@ namespace sw_drawer
                 ModelDoc2 swModel = (ModelDoc2)swAssy;
                 FeatureManager featMgr = swModel.FeatureManager;
                 
-                // Select all the virtual parts to group them using SelectByID2
-                swModel.ClearSelection2(true);
-                int selectedCount = 0;
-                foreach (var partInfo in parts)
-                {
-                    // Select component by name in assembly
-                    string compName = partInfo.RenamedName + "@" + swModel.GetTitle();
-                    bool selected = swModel.Extension.SelectByID2(
-                        compName, "COMPONENT", 0, 0, 0, true, 0, null,
-                        (int)swSelectOption_e.swSelectOptionDefault);
-                    
-                    if (selected)
-                    {
-                        selectedCount++;
-                    }
-                }
-
-                Console.WriteLine($"Selected {selectedCount} wheel components for folder");
-
-                // Create feature folder
-                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                // Step 1: Create empty folder first (before any components)
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_EmptyBefore);
                 if (folder != null)
                 {
                     folder.Name = "Wheel Hardpoints";
-                    Console.WriteLine("Created Wheel Hardpoints folder");
+                    Console.WriteLine("Created empty Wheel Hardpoints folder");
+                }
+                
+                // Step 2: Get the folder feature by name
+                folder = (Feature)swAssy.FeatureByName("Wheel Hardpoints");
+                if (folder == null)
+                {
+                    Console.WriteLine("Warning: Could not find Wheel Hardpoints folder after creation");
+                    return;
+                }
+
+                // Step 3: Build array of components to move
+                var componentsToMove = new List<object>();
+                foreach (var partInfo in parts)
+                {
+                    if (partInfo.Component != null)
+                    {
+                        componentsToMove.Add(partInfo.Component);
+                    }
+                }
+
+                Console.WriteLine($"Moving {componentsToMove.Count} components to Wheel Hardpoints folder");
+
+                // Step 4: Move components into the folder using ReorderComponents
+                if (componentsToMove.Count > 0)
+                {
+                    object[] compArray = componentsToMove.ToArray();
+                    bool success = swAssy.ReorderComponents(
+                        compArray,
+                        folder,
+                        (int)swReorderComponentsWhere_e.swReorderComponents_LastInFolder);
+                    
+                    if (success)
+                    {
+                        Console.WriteLine($"Successfully moved {compArray.Length} components to Wheel Hardpoints folder");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Warning: ReorderComponents returned false");
+                    }
                 }
 
                 swModel.ClearSelection2(true);
@@ -1445,35 +1468,79 @@ namespace sw_drawer
         {
             try
             {
+                Console.WriteLine($"CreateHardpointsFolder called with {parts.Count} parts");
+                
                 // Get the feature manager and create a folder
                 ModelDoc2 swModel = (ModelDoc2)swAssy;
                 FeatureManager featMgr = swModel.FeatureManager;
                 
-                // Select all the virtual parts to group them using SelectByID2
-                swModel.ClearSelection2(true);
-                int selectedCount = 0;
-                foreach (var partInfo in parts)
-                {
-                    // Select component by name in assembly
-                    string compName = partInfo.RenamedName + "@" + swModel.GetTitle();
-                    bool selected = swModel.Extension.SelectByID2(
-                        compName, "COMPONENT", 0, 0, 0, true, 0, null,
-                        (int)swSelectOption_e.swSelectOptionDefault);
-                    
-                    if (selected)
-                    {
-                        selectedCount++;
-                    }
-                }
-
-                Console.WriteLine($"Selected {selectedCount} components for folder");
-
-                // Create feature folder
-                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                // Step 1: Create empty folder first (before any components)
+                Console.WriteLine("Creating empty folder...");
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_EmptyBefore);
                 if (folder != null)
                 {
                     folder.Name = "Hardpoints";
-                    Console.WriteLine("Created Hardpoints folder");
+                    Console.WriteLine($"Created empty folder, named it: {folder.Name}");
+                }
+                else
+                {
+                    Console.WriteLine("InsertFeatureTreeFolder2 returned null");
+                }
+                
+                // Step 2: Get the folder feature by name
+                folder = (Feature)swAssy.FeatureByName("Hardpoints");
+                if (folder == null)
+                {
+                    Console.WriteLine("Warning: Could not find Hardpoints folder after creation, trying to find 'Folder1'");
+                    // The default name might be "Folder1" if the rename didn't work
+                    folder = (Feature)swAssy.FeatureByName("Folder1");
+                    if (folder != null)
+                    {
+                        folder.Name = "Hardpoints";
+                        Console.WriteLine("Found and renamed Folder1 to Hardpoints");
+                    }
+                }
+                
+                if (folder == null)
+                {
+                    Console.WriteLine("ERROR: Could not find any folder feature after creation");
+                    return;
+                }
+
+                Console.WriteLine($"Folder found: {folder.Name}");
+
+                // Step 3: Build array of components to move - use stored Component references directly
+                var componentsToMove = new List<object>();
+                foreach (var partInfo in parts)
+                {
+                    if (partInfo.Component != null)
+                    {
+                        componentsToMove.Add(partInfo.Component);
+                        Console.WriteLine($"  Will move: {partInfo.RenamedName}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  WARNING: Null component for {partInfo.RenamedName}");
+                    }
+                }
+
+                Console.WriteLine($"Total components to move: {componentsToMove.Count}");
+
+                // Step 4: Move components into the folder using ReorderComponents
+                if (componentsToMove.Count > 0)
+                {
+                    object[] compArray = componentsToMove.ToArray();
+                    Console.WriteLine($"Calling ReorderComponents with {compArray.Length} components...");
+                    bool success = swAssy.ReorderComponents(
+                        compArray,
+                        folder,
+                        (int)swReorderComponentsWhere_e.swReorderComponents_LastInFolder);
+                    
+                    Console.WriteLine($"ReorderComponents result: {success}");
+                }
+                else
+                {
+                    Console.WriteLine("No components to move!");
                 }
 
                 swModel.ClearSelection2(true);
@@ -1481,6 +1548,7 @@ namespace sw_drawer
             catch (Exception ex)
             {
                 Console.WriteLine($"Error creating Hardpoints folder: {ex.Message}");
+                Console.WriteLine($"Stack: {ex.StackTrace}");
             }
         }
 
@@ -1815,9 +1883,12 @@ namespace sw_drawer
                     insertedParts.Add(partInfo);
                 }
 
-                // Folder
+                // Folder + move all components in one reorder call
                 ReportState(HardpointState.CreatingHardpointsFolder);
-                CreateWheelHardpointsFolder(swAssy, insertedParts);
+                if (insertedParts.Count > 0)
+                {
+                    CreateContainingFolderFromComponents(swModel, "Wheel Hardpoints", insertedParts);
+                }
                 progress++; ReportProgress(progress);
 
                 swModel.EditRebuild3();
@@ -1831,6 +1902,171 @@ namespace sw_drawer
             {
                 Console.WriteLine($"Error: {ex.Message}");
                 return false;
+            }
+        }
+
+        private static Feature EnsureAssemblyFolder(AssemblyDoc swAssy, ModelDoc2 swModel, string folderName, Component2 anchorComponent)
+        {
+            try
+            {
+                if (swAssy == null || swModel == null)
+                {
+                    Console.WriteLine($"Cannot create folder '{folderName}': invalid assembly/model document");
+                    return null;
+                }
+
+                Feature existing = (Feature)swAssy.FeatureByName(folderName);
+                if (existing != null)
+                {
+                    Console.WriteLine($"Using existing folder '{folderName}'");
+                    return existing;
+                }
+
+                if (anchorComponent == null)
+                {
+                    Console.WriteLine($"Cannot create folder '{folderName}': anchor component is null");
+                    return null;
+                }
+
+                FeatureManager featMgr = swModel.FeatureManager;
+                if (featMgr == null)
+                {
+                    Console.WriteLine($"Cannot create folder '{folderName}': FeatureManager is null");
+                    return null;
+                }
+
+                swModel.ClearSelection2(true);
+                bool selected = anchorComponent.Select4(false, null, false);
+                Console.WriteLine($"Anchor select for folder '{folderName}': {selected}");
+                if (!selected)
+                {
+                    return null;
+                }
+
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_EmptyBefore);
+                swModel.ClearSelection2(true);
+
+                if (folder != null)
+                {
+                    folder.Name = folderName;
+                    Console.WriteLine($"Created folder '{folderName}'");
+                    return folder;
+                }
+
+                Console.WriteLine($"InsertFeatureTreeFolder2 returned null for '{folderName}'");
+                return (Feature)swAssy.FeatureByName(folderName);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating folder '{folderName}': {ex.Message}");
+                return null;
+            }
+        }
+
+        private static Feature CreateContainingFolderFromComponents(ModelDoc2 swModel, string folderName, List<VirtualPartInfo> parts)
+        {
+            try
+            {
+                if (swModel == null || parts == null || parts.Count == 0)
+                {
+                    Console.WriteLine($"Cannot create folder '{folderName}': no model or components");
+                    return null;
+                }
+
+                FeatureManager featMgr = swModel.FeatureManager;
+                if (featMgr == null)
+                {
+                    Console.WriteLine($"Cannot create folder '{folderName}': FeatureManager is null");
+                    return null;
+                }
+
+                swModel.ClearSelection2(true);
+
+                int selectedCount = 0;
+                foreach (var part in parts)
+                {
+                    if (part?.Component == null)
+                    {
+                        continue;
+                    }
+
+                    bool selected = part.Component.Select4(true, null, false);
+                    if (selected)
+                    {
+                        selectedCount++;
+                    }
+                }
+
+                Console.WriteLine($"Selected {selectedCount} components for containing folder '{folderName}'");
+
+                if (selectedCount == 0)
+                {
+                    swModel.ClearSelection2(true);
+                    return null;
+                }
+
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                swModel.ClearSelection2(true);
+
+                if (folder != null)
+                {
+                    folder.Name = folderName;
+                    Console.WriteLine($"Created containing folder '{folderName}' with {selectedCount} components");
+                    return folder;
+                }
+
+                Console.WriteLine($"InsertFeatureTreeFolder2(Containing) returned null for '{folderName}'");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating containing folder '{folderName}': {ex.Message}");
+                return null;
+            }
+        }
+
+        private static void MoveComponentsToFolder(AssemblyDoc swAssy, List<VirtualPartInfo> parts, Feature folder, string folderName)
+        {
+            try
+            {
+                if (swAssy == null || parts == null || folder == null)
+                {
+                    return;
+                }
+
+                var componentObjects = new List<object>();
+                foreach (var part in parts)
+                {
+                    if (part?.Component != null)
+                    {
+                        componentObjects.Add(part.Component);
+                    }
+                }
+
+                if (componentObjects.Count == 0)
+                {
+                    Console.WriteLine($"No components found to move into '{folderName}'");
+                    return;
+                }
+
+                object[] components = componentObjects.ToArray();
+                bool moved = swAssy.ReorderComponents(
+                    components,
+                    folder,
+                    (int)swReorderComponentsWhere_e.swReorderComponents_LastInFolder);
+
+                if (moved)
+                {
+                    Console.WriteLine($"Moved {components.Length} components into '{folderName}'");
+                }
+                else
+                {
+                    Console.WriteLine($"Warning: Failed to move components into '{folderName}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error moving components into '{folderName}': {ex.Message}");
             }
         }
 
