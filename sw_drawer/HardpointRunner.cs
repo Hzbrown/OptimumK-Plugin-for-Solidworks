@@ -84,6 +84,7 @@ namespace sw_drawer
                 
                 string frontJsonPath = Path.Combine(Path.GetDirectoryName(jsonPath), "Front_Suspension.json");
                 string rearJsonPath = Path.Combine(Path.GetDirectoryName(jsonPath), "Rear_Suspension.json");
+                double rearReferenceOffsetMm = LoadRearReferenceOffsetMm(Path.GetDirectoryName(jsonPath));
                 
                 var hardpoints = new List<HardpointInfo>();
                 
@@ -91,9 +92,9 @@ namespace sw_drawer
                 if (File.Exists(frontJsonPath))
                 {
                     var frontData = LoadJsonData(frontJsonPath);
-                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints);
+                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints, 0.0);
                     // Also extract wheels from front suspension
-                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints);
+                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints, false, 0.0);
                     Console.WriteLine($"Loaded {hardpoints.Count} hardpoints from Front_Suspension.json");
                 }
                 
@@ -102,9 +103,9 @@ namespace sw_drawer
                 if (File.Exists(rearJsonPath))
                 {
                     var rearData = LoadJsonData(rearJsonPath);
-                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints);
+                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints, rearReferenceOffsetMm);
                     // Also extract wheels from rear suspension
-                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints);
+                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints, true, rearReferenceOffsetMm);
                     Console.WriteLine($"Loaded {hardpoints.Count - frontCount} hardpoints from Rear_Suspension.json");
                 }
                 
@@ -164,8 +165,16 @@ namespace sw_drawer
                         progressCount++;
                         ReportProgress(progressCount);
 
-                        // Step 5: Rename internal coordinate system using EditPart2
-                        RenameInternalCoordinateSystem(swApp, swAssy, swModel, partInfo);
+                        // Step 5: Rename internal coordinate system using EditPart2.
+                        // For wheels, also apply camber/toe orientation to the internal CS.
+                        if (IsWheelHardpoint(partInfo.BaseName))
+                        {
+                            RenameAndOrientWheelCoordinateSystem(swApp, swAssy, swModel, partInfo);
+                        }
+                        else
+                        {
+                            RenameInternalCoordinateSystem(swApp, swAssy, swModel, partInfo);
+                        }
                         progressCount++;
                         ReportProgress(progressCount);
                         
@@ -349,60 +358,68 @@ namespace sw_drawer
 
         private static void ExtractWheelsFromJson(Dictionary<string, object> jsonData, string suffix, List<HardpointInfo> hardpoints)
         {
-            if (jsonData.TryGetValue("Wheels", out object wheelsObj) && wheelsObj is Dictionary<string, object> wheelsData)
+            bool isRear = string.Equals(suffix, "_REAR", StringComparison.OrdinalIgnoreCase);
+            ExtractWheelsFromJson(jsonData, suffix, hardpoints, isRear, 0.0);
+        }
+
+        private static void ExtractWheelsFromJson(
+            Dictionary<string, object> jsonData,
+            string suffix,
+            List<HardpointInfo> hardpoints,
+            bool isRear,
+            double referenceDistanceMm)
+        {
+            if (!(jsonData.TryGetValue("Wheels", out object wheelsObj) && wheelsObj is Dictionary<string, object> wheelsData))
             {
-                // Extract wheels data and create hardpoints with the specified suffix
-                if (wheelsData.TryGetValue("Half Track", out object halfTrackObj) &&
-                    wheelsData.TryGetValue("Tire Diameter", out object tireDiameterObj))
+                return;
+            }
+
+            try
+            {
+                // Mirror draw_suspension.py InsertWheel logic.
+                double halfTrack      = GetWheelValue(wheelsData, "Half Track", "left");
+                double tireDiameter   = GetWheelValue(wheelsData, "Tire Diameter", "left");
+                double lateralOffset  = GetWheelValue(wheelsData, "Lateral Offset", "left", 0.0);
+                double verticalOffset = GetWheelValue(wheelsData, "Vertical Offset", "left", 0.0);
+                double longOffset     = GetWheelValue(wheelsData, "Longitudinal Offset", "left", 0.0);
+                double camber         = GetWheelValue(wheelsData, "Static Camber", "left", 0.0);
+                double toe            = GetWheelValue(wheelsData, "Static Toe", "left", 0.0);
+
+                double xBase = referenceDistanceMm + longOffset;
+                double yBase = halfTrack + lateralOffset;
+                double z     = tireDiameter / 2.0 + verticalOffset;
+
+                string prefix = isRear ? "R" : "F";
+
+                // Left wheel (positive Y)
+                hardpoints.Add(new HardpointInfo
                 {
-                    Dictionary<string, object> halfTrack = halfTrackObj as Dictionary<string, object>;
-                    Dictionary<string, object> tireDiameter = tireDiameterObj as Dictionary<string, object>;
-                    
-                    if (halfTrack != null && tireDiameter != null &&
-                        halfTrack.TryGetValue("left", out object halfTrackValue) &&
-                        tireDiameter.TryGetValue("left", out object tireDiameterValue))
-                    {
-                        double halfTrackDouble = Convert.ToDouble(halfTrackValue);
-                        double tireRadius = Convert.ToDouble(tireDiameterValue) / 2.0;
+                    BaseName = $"{prefix}L_wheel",
+                    Suffix   = suffix,
+                    X        = xBase,
+                    Y        = yBase,
+                    Z        = z,
+                    AngleX   = camber,
+                    AngleY   = 0,
+                    AngleZ   = toe
+                });
 
-                        // Create wheels with the specified suffix (FRONT or REAR)
-                        hardpoints.Add(new HardpointInfo
-                        {
-                            BaseName = "FL_wheel",
-                            Suffix = suffix,
-                            X = 0, // Will be set by reference distance
-                            Y = halfTrackDouble,
-                            Z = tireRadius
-                        });
-
-                        hardpoints.Add(new HardpointInfo
-                        {
-                            BaseName = "FR_wheel", 
-                            Suffix = suffix,
-                            X = 0,
-                            Y = -halfTrackDouble,
-                            Z = tireRadius
-                        });
-
-                        hardpoints.Add(new HardpointInfo
-                        {
-                            BaseName = "RL_wheel",
-                            Suffix = suffix,
-                            X = 0,
-                            Y = halfTrackDouble,
-                            Z = tireRadius
-                        });
-
-                        hardpoints.Add(new HardpointInfo
-                        {
-                            BaseName = "RR_wheel",
-                            Suffix = suffix, 
-                            X = 0,
-                            Y = -halfTrackDouble,
-                            Z = tireRadius
-                        });
-                    }
-                }
+                // Right wheel (negative Y, mirrored angles)
+                hardpoints.Add(new HardpointInfo
+                {
+                    BaseName = $"{prefix}R_wheel",
+                    Suffix   = suffix,
+                    X        = xBase,
+                    Y        = -yBase,
+                    Z        = z,
+                    AngleX   = -camber,
+                    AngleY   = 0,
+                    AngleZ   = -toe
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not extract wheel data for suffix '{suffix}': {ex.Message}");
             }
         }
 
@@ -956,21 +973,22 @@ namespace sw_drawer
                 string jsonDir = Path.GetDirectoryName(jsonPath);
                 string frontJsonPath = Path.Combine(jsonDir, "Front_Suspension.json");
                 string rearJsonPath = Path.Combine(jsonDir, "Rear_Suspension.json");
+                double rearReferenceOffsetMm = LoadRearReferenceOffsetMm(jsonDir);
 
                 var hardpoints = new List<HardpointInfo>();
 
                 if (File.Exists(frontJsonPath))
                 {
                     var frontData = LoadJsonData(frontJsonPath);
-                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints);
-                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints);
+                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints, 0.0);
+                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints, false, 0.0);
                 }
 
                 if (File.Exists(rearJsonPath))
                 {
                     var rearData = LoadJsonData(rearJsonPath);
-                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints);
-                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints);
+                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints, rearReferenceOffsetMm);
+                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints, true, rearReferenceOffsetMm);
                 }
 
                 if (hardpoints.Count == 0)
@@ -1364,18 +1382,28 @@ namespace sw_drawer
                     return;
                 }
 
-                bool compCsSelected = swModel.Extension.SelectByID2(
-                    componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
-                    "COORDSYS",
-                    0, 0, 0,
-                    true,
-                    2,
-                    null,
-                    (int)swSelectOption_e.swSelectOptionDefault);
-
-                if (!compCsSelected)
+                bool compOriginSelected = SelectComponentOriginForMate(swModel, comp, 2);
+                if (!compOriginSelected && !string.IsNullOrWhiteSpace(componentCoordName))
                 {
-                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
+                    // Fallback to component coordinate system name if origin selection fails.
+                    compOriginSelected = swModel.Extension.SelectByID2(
+                        componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
+                        "COORDSYS",
+                        0, 0, 0,
+                        true,
+                        2,
+                        null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+
+                    if (compOriginSelected)
+                    {
+                        Console.WriteLine($"Note: Fallback to component CSys '{componentCoordName}' for '{comp.Name2}'");
+                    }
+                }
+
+                if (!compOriginSelected)
+                {
+                    Console.WriteLine($"Warning: Could not select hardpoint origin for '{comp.Name2}'");
                     swModel.ClearSelection2(true);
                     return;
                 }
@@ -1401,6 +1429,12 @@ namespace sw_drawer
                     Feature mateFeat = (Feature)swModel.FeatureByPositionReverse(0);
                     if (mateFeat != null)
                     {
+                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeat);
+                        if (axisAligned)
+                        {
+                            Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
+                        }
+
                         InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeat, activeConfigName);
                     }
                 }
@@ -1490,6 +1524,129 @@ namespace sw_drawer
             }
 
             return null;
+        }
+
+        private static bool SelectComponentOriginForMate(ModelDoc2 swModel, Component2 comp, int selectionMark)
+        {
+            if (swModel == null || comp == null)
+            {
+                return false;
+            }
+
+            string assemblyTitle = swModel.GetTitle();
+            string componentName = comp.Name2 ?? string.Empty;
+
+            bool selected = swModel.Extension.SelectByID2(
+                "Origin@" + componentName + "@" + assemblyTitle,
+                "ORIGINFOLDER",
+                0, 0, 0,
+                true,
+                selectionMark,
+                null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+
+            if (!selected)
+            {
+                selected = swModel.Extension.SelectByID2(
+                    "Point1@Origin@" + componentName + "@" + assemblyTitle,
+                    "EXTSKETCHPOINT",
+                    0, 0, 0,
+                    true,
+                    selectionMark,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+            }
+
+            return selected;
+        }
+
+        private static bool TryEnableCoincidentMateAxisAlignment(ModelDoc2 swModel, Feature mateFeature)
+        {
+            if (swModel == null || mateFeature == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                object mateDefinition = mateFeature.GetDefinition();
+                if (mateDefinition == null)
+                {
+                    return false;
+                }
+
+                Type definitionType = mateDefinition.GetType();
+                var accessSelections = definitionType.GetMethod("AccessSelections");
+                bool selectionAccessOpen = false;
+
+                if (accessSelections != null)
+                {
+                    object accessResult = accessSelections.Invoke(mateDefinition, new object[] { swModel, null });
+                    if (accessResult is bool && !(bool)accessResult)
+                    {
+                        return false;
+                    }
+                    selectionAccessOpen = true;
+                }
+
+                bool changed = false;
+                changed |= TrySetBooleanProperty(mateDefinition, "AlignAxes", true);
+                changed |= TrySetBooleanProperty(mateDefinition, "AlignAxis", true);
+
+                if (!changed)
+                {
+                    if (selectionAccessOpen)
+                    {
+                        var releaseSelections = definitionType.GetMethod("ReleaseSelectionAccess");
+                        releaseSelections?.Invoke(mateDefinition, null);
+                    }
+                    return false;
+                }
+
+                bool modified = mateFeature.ModifyDefinition(mateDefinition, swModel, null);
+
+                if (selectionAccessOpen)
+                {
+                    var releaseSelections = definitionType.GetMethod("ReleaseSelectionAccess");
+                    releaseSelections?.Invoke(mateDefinition, null);
+                }
+
+                return modified;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not enable coincident mate axis alignment: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static bool TrySetBooleanProperty(object target, string propertyName, bool value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(propertyName))
+            {
+                return false;
+            }
+
+            try
+            {
+                var propertyInfo = target.GetType().GetProperty(
+                    propertyName,
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.IgnoreCase);
+
+                if (propertyInfo == null || !propertyInfo.CanWrite || propertyInfo.PropertyType != typeof(bool))
+                {
+                    return false;
+                }
+
+                propertyInfo.SetValue(target, value, null);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void CreateOrUpdateTransform(PartDoc swPart, BodyTransformInfo bodyTransform, string configName)
@@ -1694,6 +1851,15 @@ namespace sw_drawer
 
         private static void ExtractHardpointsWithSuffix(Dictionary<string, object> jsonData, string suffix, List<HardpointInfo> hardpoints)
         {
+            ExtractHardpointsWithSuffix(jsonData, suffix, hardpoints, 0.0);
+        }
+
+        private static void ExtractHardpointsWithSuffix(
+            Dictionary<string, object> jsonData,
+            string suffix,
+            List<HardpointInfo> hardpoints,
+            double xOffsetMm)
+        {
             // Extract from all sections except Wheels
             foreach (var section in jsonData)
             {
@@ -1701,27 +1867,25 @@ namespace sw_drawer
                 {
                     continue; // Wheels handled separately if needed
                 }
-                else
+
+                // This is a suspension section (e.g., "Double A-Arm", "Push Pull")
+                Dictionary<string, object> sectionObj = section.Value as Dictionary<string, object>;
+                if (sectionObj != null)
                 {
-                    // This is a suspension section (e.g., "Double A-Arm", "Push Pull")
-                    Dictionary<string, object> sectionObj = section.Value as Dictionary<string, object>;
-                    if (sectionObj != null)
+                    foreach (var pointProperty in sectionObj)
                     {
-                        foreach (var pointProperty in sectionObj)
+                        string pointName = pointProperty.Key;
+                        List<object> coords = pointProperty.Value as List<object>;
+                        if (coords != null && coords.Count >= 3)
                         {
-                            string pointName = pointProperty.Key;
-                            List<object> coords = pointProperty.Value as List<object>;
-                            if (coords != null && coords.Count >= 3)
+                            hardpoints.Add(new HardpointInfo
                             {
-                                hardpoints.Add(new HardpointInfo
-                                {
-                                    BaseName = pointName,
-                                    Suffix = suffix,
-                                    X = Convert.ToDouble(coords[0]),
-                                    Y = Convert.ToDouble(coords[1]),
-                                    Z = Convert.ToDouble(coords[2])
-                                });
-                            }
+                                BaseName = pointName,
+                                Suffix = suffix,
+                                X = Convert.ToDouble(coords[0]) + xOffsetMm,
+                                Y = Convert.ToDouble(coords[1]),
+                                Z = Convert.ToDouble(coords[2])
+                            });
                         }
                     }
                 }
@@ -2012,10 +2176,7 @@ namespace sw_drawer
                 }
 
                 // Select virtual part origin (mark 2)
-                bool sel2 = swModel.Extension.SelectByID2(
-                    "Origin@" + partInfo.RenamedName + "@" + swModel.GetTitle(),
-                    "ORIGINFOLDER", 0, 0, 0, true, 2, null,
-                    (int)swSelectOption_e.swSelectOptionDefault);
+                bool sel2 = SelectComponentOriginForMate(swModel, partInfo.Component, 2);
 
                 if (!sel2)
                 {
@@ -2037,6 +2198,16 @@ namespace sw_drawer
 
                 if (mate != null && mateError == 0)
                 {
+                    Feature mateFeat = (Feature)swModel.FeatureByPositionReverse(0);
+                    if (mateFeat != null)
+                    {
+                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeat);
+                        if (axisAligned)
+                        {
+                            Console.WriteLine($"Enabled coincident mate axis alignment for {partInfo.RenamedName}");
+                        }
+                    }
+
                     Console.WriteLine($"Added coincident mate with axis alignment for {partInfo.RenamedName}");
                 }
                 else
@@ -2288,10 +2459,7 @@ namespace sw_drawer
                 }
 
                 // Select virtual part origin (mark 2)
-                bool sel2 = swModel.Extension.SelectByID2(
-                    "Origin@" + partTransform.Component.Name2 + "@" + swModel.GetTitle(),
-                    "ORIGINFOLDER", 0, 0, 0, true, 2, null,
-                    (int)swSelectOption_e.swSelectOptionDefault);
+                bool sel2 = SelectComponentOriginForMate(swModel, partTransform.Component, 2);
 
                 if (!sel2)
                 {
@@ -2313,6 +2481,16 @@ namespace sw_drawer
 
                 if (mate != null && mateError == 0)
                 {
+                    Feature mateFeat = (Feature)swModel.FeatureByPositionReverse(0);
+                    if (mateFeat != null)
+                    {
+                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeat);
+                        if (axisAligned)
+                        {
+                            Console.WriteLine($"Enabled coincident mate axis alignment for {partTransform.Component.Name2}");
+                        }
+                    }
+
                     Console.WriteLine($"Updated mate to pose coordinate system for {partTransform.Component.Name2}");
                 }
                 else
@@ -2800,6 +2978,51 @@ namespace sw_drawer
                 return Convert.ToDouble(val);
             }
             return fallback;
+        }
+
+        private static bool IsWheelHardpoint(string baseName)
+        {
+            return !string.IsNullOrWhiteSpace(baseName) &&
+                   baseName.IndexOf("wheel", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Reads Vehicle_Setup.json and returns rear offset in mm as
+        /// -Reference distance (matching draw_suspension.py behavior).
+        /// </summary>
+        private static double LoadRearReferenceOffsetMm(string jsonDirectory)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(jsonDirectory))
+                {
+                    return 0.0;
+                }
+
+                string vehicleSetupPath = Path.Combine(jsonDirectory, "Vehicle_Setup.json");
+                if (!File.Exists(vehicleSetupPath))
+                {
+                    return 0.0;
+                }
+
+                var vehicleData = LoadJsonData(vehicleSetupPath);
+                if (vehicleData == null)
+                {
+                    return 0.0;
+                }
+
+                if (vehicleData.TryGetValue("Reference distance", out object refDistanceObj))
+                {
+                    return -Convert.ToDouble(refDistanceObj);
+                }
+
+                return 0.0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not read rear reference offset: {ex.Message}");
+                return 0.0;
+            }
         }
 
         /// <summary>
