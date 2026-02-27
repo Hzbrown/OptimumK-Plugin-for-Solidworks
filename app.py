@@ -1381,21 +1381,6 @@ class PoseCreationTab(QWidget):
         group_run.setLayout(h_run)
         layout.addWidget(group_run)
         
-        # Existing poses
-        group_poses = QGroupBox("Existing Poses")
-        layout_poses = QVBoxLayout()
-        
-        self.pose_list = QTextEdit()
-        self.pose_list.setReadOnly(True)
-        self.pose_list.setMaximumHeight(100)
-        layout_poses.addWidget(self.pose_list)
-        
-        btn_refresh_poses = QPushButton("Refresh Poses")
-        btn_refresh_poses.clicked.connect(self.refresh_poses)
-        layout_poses.addWidget(btn_refresh_poses)
-        
-        group_poses.setLayout(layout_poses)
-        layout.addWidget(group_poses)
         
         # Console output
         layout.addWidget(QLabel("Output:"))
@@ -1412,7 +1397,7 @@ class PoseCreationTab(QWidget):
         
         layout.addStretch()
         self.setLayout(layout)
-        self.refresh_poses()
+    
     
     def set_buttons_enabled(self, enabled):
         """Enable or disable all action buttons."""
@@ -1530,16 +1515,7 @@ class PoseCreationTab(QWidget):
             self.status_text.append(f"✗ Error creating folder: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to create folder: {str(e)}")
     
-    def refresh_poses(self):
-        """Refresh the list of existing poses."""
-        try:
-            poses = get_existing_poses()
-            if poses:
-                self.pose_list.setText("\n".join(poses))
-            else:
-                self.pose_list.setText("No poses found")
-        except Exception as e:
-            self.pose_list.setText(f"Error loading poses: {str(e)}")
+
 
 
 class VisualizationControlTab(QWidget):
@@ -1668,25 +1644,6 @@ class VisualizationControlTab(QWidget):
         group_categories.setLayout(layout_categories)
         layout.addWidget(group_categories)
 
-        # Custom virtual component filter
-        group_custom = QGroupBox("Custom Virtual Component Filter")
-        h_custom = QHBoxLayout()
-
-        self.virtual_filter = QLineEdit()
-        self.virtual_filter.setPlaceholderText("Enter substring (e.g., CHAS_, UPRI_, RearLeft)")
-        h_custom.addWidget(self.virtual_filter)
-
-        btn_show_custom = QPushButton("Show")
-        btn_show_custom.clicked.connect(self.show_virtual_custom)
-        h_custom.addWidget(btn_show_custom)
-
-        btn_hide_custom = QPushButton("Hide")
-        btn_hide_custom.clicked.connect(self.hide_virtual_custom)
-        h_custom.addWidget(btn_hide_custom)
-
-        group_custom.setLayout(h_custom)
-        layout.addWidget(group_custom)
-        
         # Marker controls
         group_markers = QGroupBox("Marker Controls")
         layout_markers = QVBoxLayout()
@@ -1757,23 +1714,6 @@ class VisualizationControlTab(QWidget):
             self.status_text.append(f"{action} {target_text}... {'✓ Done' if success else '✗ Failed'}")
         except Exception as e:
             self.status_text.append(f"✗ Error: {str(e)}")
-
-    def show_virtual_custom(self):
-        """Show virtual components matching custom text filter."""
-        text = self.virtual_filter.text().strip()
-        if not text:
-            QMessageBox.warning(self, "Warning", "Please enter filter text")
-            return
-        self.set_suspension_visibility('substring', True, text)
-
-    def hide_virtual_custom(self):
-        """Hide virtual components matching custom text filter."""
-        text = self.virtual_filter.text().strip()
-        if not text:
-            QMessageBox.warning(self, "Warning", "Please enter filter text")
-            return
-        self.set_suspension_visibility('substring', False, text)
-
 
 class HelpTab(QWidget):
     def __init__(self):

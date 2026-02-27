@@ -1408,36 +1408,40 @@ namespace sw_drawer
                     return;
                 }
 
-                int mateError;
-                Mate2 mate = swAssy.AddMate5(
-                    (int)swMateType_e.swMateCOINCIDENT,
+                bool mateCreated = InsertPoseCreateCoincidentMateFromSelection(
+                    swModel,
+                    swAssy,
                     (int)swMateAlign_e.swMateAlignALIGNED,
-                    false,
-                    0, 0, 0, 0, 0, 0, 0, 0,
-                    false,
-                    false,
-                    (int)swMateWidthOptions_e.swMateWidth_Centered,
-                    out mateError);
+                    out Feature mateFeature);
 
-                if (mate == null || mateError != 0)
+                if (!mateCreated)
                 {
-                    // Intentionally silent on mate failure here.
+                    Console.WriteLine($"Warning: Could not create coincident mate via CreateMateData for '{comp.Name2}'");
                 }
-                else
+                else if (mateFeature != null)
                 {
-                    Feature mateFeature = (Feature)swModel.FeatureByPositionReverse(0);
-
-                    // Scope mate to active configuration only (best effort).
-                    if (mateFeature != null)
+                    bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
+                    if (axisAligned)
                     {
-                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
-                        if (axisAligned)
-                        {
-                            Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
-                        }
-
-                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeature, activeConfigName);
+                        Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
                     }
+
+                    InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeature, activeConfigName);
+                }
+
+                // Explicit axis-to-axis aligned mate (X-axis) to enforce orientation.
+                bool axisMateCreated = InsertPoseCreateCoordinateSystemAxisMate(
+                    swModel,
+                    swAssy,
+                    comp,
+                    componentCoordName,
+                    poseCoordName,
+                    activeConfigName,
+                    "X");
+
+                if (!axisMateCreated)
+                {
+                    Console.WriteLine($"Warning: Could not create explicit X-axis aligned mate for '{comp.Name2}'");
                 }
 
                 swModel.ClearSelection2(true);
@@ -1446,6 +1450,225 @@ namespace sw_drawer
             {
                 Console.WriteLine($"Warning: Failed to mate '{comp.Name2}' to '{poseCoordName}': {ex.Message}");
                 try { swModel.ClearSelection2(true); } catch { }
+            }
+        }
+
+        private static bool InsertPoseCreateCoordinateSystemAxisMate(
+            ModelDoc2 swModel,
+            AssemblyDoc swAssy,
+            Component2 comp,
+            string componentCoordName,
+            string poseCoordName,
+            string activeConfigName,
+            string axisLetter)
+        {
+            if (swModel == null || swAssy == null || comp == null ||
+                string.IsNullOrWhiteSpace(componentCoordName) ||
+                string.IsNullOrWhiteSpace(poseCoordName) ||
+                string.IsNullOrWhiteSpace(axisLetter))
+            {
+                return false;
+            }
+
+            try
+            {
+                swModel.ClearSelection2(true);
+
+                bool poseAxisSelected = InsertPoseSelectCoordinateSystemAxisByName(
+                    swModel,
+                    poseCoordName,
+                    null,
+                    axisLetter,
+                    false,
+                    1);
+
+                if (!poseAxisSelected)
+                {
+                    swModel.ClearSelection2(true);
+                    return false;
+                }
+
+                bool compAxisSelected = InsertPoseSelectCoordinateSystemAxisByName(
+                    swModel,
+                    componentCoordName,
+                    comp,
+                    axisLetter,
+                    true,
+                    2);
+
+                if (!compAxisSelected)
+                {
+                    swModel.ClearSelection2(true);
+                    return false;
+                }
+
+                bool axisMateCreated = InsertPoseCreateCoincidentMateFromSelection(
+                    swModel,
+                    swAssy,
+                    (int)swMateAlign_e.swMateAlignALIGNED,
+                    out Feature mateFeature);
+
+                if (!axisMateCreated)
+                {
+                    swModel.ClearSelection2(true);
+                    return false;
+                }
+
+                if (mateFeature != null)
+                {
+                    TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
+                    InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeature, activeConfigName);
+                }
+
+                swModel.ClearSelection2(true);
+                return true;
+            }
+            catch
+            {
+                try { swModel.ClearSelection2(true); } catch { }
+                return false;
+            }
+        }
+
+        private static bool InsertPoseSelectCoordinateSystemAxisByName(
+            ModelDoc2 swModel,
+            string coordSystemName,
+            Component2 component,
+            string axisLetter,
+            bool append,
+            int selectionMark)
+        {
+            if (swModel == null || string.IsNullOrWhiteSpace(coordSystemName) || string.IsNullOrWhiteSpace(axisLetter))
+            {
+                return false;
+            }
+
+            string asmTitle = swModel.GetTitle();
+            string compName = component != null ? (component.Name2 ?? string.Empty) : null;
+            string axisPrefix = axisLetter.Trim().ToUpperInvariant();
+
+            var candidates = new List<string>();
+            if (component == null)
+            {
+                candidates.Add($"{axisPrefix} Axis1@{coordSystemName}");
+                candidates.Add($"{axisPrefix} Axis@{coordSystemName}");
+                candidates.Add($"{axisPrefix}Axis1@{coordSystemName}");
+                candidates.Add($"{axisPrefix}Axis@{coordSystemName}");
+            }
+            else
+            {
+                candidates.Add($"{axisPrefix} Axis1@{coordSystemName}@{compName}@{asmTitle}");
+                candidates.Add($"{axisPrefix} Axis@{coordSystemName}@{compName}@{asmTitle}");
+                candidates.Add($"{axisPrefix}Axis1@{coordSystemName}@{compName}@{asmTitle}");
+                candidates.Add($"{axisPrefix}Axis@{coordSystemName}@{compName}@{asmTitle}");
+            }
+
+            foreach (string candidate in candidates)
+            {
+                bool selected = swModel.Extension.SelectByID2(
+                    candidate,
+                    "AXIS",
+                    0, 0, 0,
+                    append,
+                    selectionMark,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (selected)
+                {
+                    return true;
+                }
+
+                selected = swModel.Extension.SelectByID2(
+                    candidate,
+                    "DATUMAXIS",
+                    0, 0, 0,
+                    append,
+                    selectionMark,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (selected)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool InsertPoseCreateCoincidentMateFromSelection(
+            ModelDoc2 swModel,
+            AssemblyDoc swAssy,
+            int mateAlignment,
+            out Feature createdMateFeature)
+        {
+            createdMateFeature = null;
+
+            if (swModel == null || swAssy == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                SelectionMgr selectionMgr = swModel.SelectionManager as SelectionMgr;
+                if (selectionMgr == null)
+                {
+                    return false;
+                }
+
+                object entity1 = selectionMgr.GetSelectedObject6(1, -1);
+                object entity2 = selectionMgr.GetSelectedObject6(2, -1);
+                if (entity1 == null || entity2 == null)
+                {
+                    return false;
+                }
+
+                object coincMateData = swAssy.GetType().InvokeMember(
+                    "CreateMateData",
+                    System.Reflection.BindingFlags.InvokeMethod |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance,
+                    null,
+                    swAssy,
+                    new object[] { (int)swMateType_e.swMateCOINCIDENT });
+
+                if (coincMateData == null)
+                {
+                    return false;
+                }
+
+                Type mateDataType = coincMateData.GetType();
+                var entitiesProp = mateDataType.GetProperty("EntitiesToMate");
+                if (entitiesProp == null || !entitiesProp.CanWrite)
+                {
+                    return false;
+                }
+
+                entitiesProp.SetValue(coincMateData, new object[] { entity1, entity2 }, null);
+                TrySetIntProperty(coincMateData, "MateAlignment", mateAlignment);
+
+                object createdMate = swAssy.GetType().InvokeMember(
+                    "CreateMate",
+                    System.Reflection.BindingFlags.InvokeMethod |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance,
+                    null,
+                    swAssy,
+                    new object[] { coincMateData });
+
+                if (createdMate == null)
+                {
+                    return false;
+                }
+
+                createdMateFeature = (Feature)swModel.FeatureByPositionReverse(0);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -1591,6 +1814,10 @@ namespace sw_drawer
                 }
 
                 bool changed = false;
+                changed |= TrySetIntProperty(
+                    mateDefinition,
+                    "MateAlignment",
+                    (int)swMateAlign_e.swMateAlignALIGNED);
                 changed |= TrySetBooleanProperty(mateDefinition, "AlignAxes", true);
                 changed |= TrySetBooleanProperty(mateDefinition, "AlignAxis", true);
 
@@ -1643,6 +1870,48 @@ namespace sw_drawer
 
                 propertyInfo.SetValue(target, value, null);
                 return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TrySetIntProperty(object target, string propertyName, int value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(propertyName))
+            {
+                return false;
+            }
+
+            try
+            {
+                var propertyInfo = target.GetType().GetProperty(
+                    propertyName,
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.IgnoreCase);
+
+                if (propertyInfo == null || !propertyInfo.CanWrite)
+                {
+                    return false;
+                }
+
+                Type propertyType = propertyInfo.PropertyType;
+                if (propertyType == typeof(int))
+                {
+                    propertyInfo.SetValue(target, value, null);
+                    return true;
+                }
+
+                if (propertyType.IsEnum)
+                {
+                    object enumValue = Enum.ToObject(propertyType, value);
+                    propertyInfo.SetValue(target, enumValue, null);
+                    return true;
+                }
+
+                return false;
             }
             catch
             {
