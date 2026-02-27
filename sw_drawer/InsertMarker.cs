@@ -38,6 +38,7 @@ namespace sw_drawer
             { "wheel", new[] { 64, 64, 64 } },      // Dark Gray - Wheels
         };
 
+        private static readonly int[] TieRodColor = new[] { 255, 165, 0 }; // Orange (Tie Rod)
         private static readonly int[] DefaultColor = new[] { 128, 128, 128 }; // Gray default
 
 
@@ -121,6 +122,19 @@ namespace sw_drawer
         private static int[] GetColorForName(string name)
         {
             string upper = name.ToUpperInvariant();
+
+            // Tie rod tokens should take precedence over CHAS_/UPRI_ mixed names
+            // like CHAS_TiePnt_L and UPRI_TiePnt_R.
+            if (upper.Contains("TIER_") ||
+                upper.Contains("TIEROD") ||
+                upper.Contains("TIE_ROD") ||
+                upper.Contains("TIE ROD") ||
+                upper.Contains("TIEPNT") ||
+                upper.Contains("TIE_PNT"))
+            {
+                return TieRodColor;
+            }
+
             foreach (var kvp in ColorMap)
             {
                 if (upper.Contains(kvp.Key.ToUpperInvariant()))

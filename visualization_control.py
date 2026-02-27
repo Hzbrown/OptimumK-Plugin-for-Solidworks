@@ -224,6 +224,7 @@ def set_feature_visibility(feature_name, visible):
 def get_color_coding_info():
     """Get information about color coding for visualization."""
     color_info = {
+        'TiePnt': {'name': 'Tie Rod', 'rgb': [255, 165, 0], 'description': 'Tie rod components (TiePnt/TIER naming)'},
         'CHAS_': {'name': 'Chassis', 'rgb': [255, 0, 0], 'description': 'Chassis pickup points'},
         'wheel': {'name': 'Wheels', 'rgb': [0, 255, 0], 'description': 'Wheel components'},
         'UPRI_': {'name': 'Upright', 'rgb': [0, 0, 255], 'description': 'Upright components'},
@@ -252,6 +253,7 @@ def get_visualization_controls():
             {'name': 'By Name', 'target': 'name', 'description': 'Show/hide markers by name pattern'}
         ],
         'categories': [
+            {'name': 'Tie Rod', 'target': 'substring', 'filter': 'TiePnt', 'description': 'Show/hide tie rod components'},
             {'name': 'Chassis', 'target': 'substring', 'filter': 'CHAS_', 'description': 'Show/hide chassis components'},
             {'name': 'Upright', 'target': 'substring', 'filter': 'UPRI_', 'description': 'Show/hide upright components'},
             {'name': 'Rocker', 'target': 'substring', 'filter': 'ROCK_', 'description': 'Show/hide rocker components'},

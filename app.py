@@ -823,6 +823,16 @@ class MarkersTab(QWidget):
         btn_hide_nsma = QPushButton("Hide")
         btn_hide_nsma.clicked.connect(lambda: self.set_name_visibility("NSMA_", False))
         grid_types.addWidget(btn_hide_nsma, 1, 3)
+
+        # Row 2: TiePnt (Tie Rod)
+        btn_show_tier = QPushButton("Show TiePnt")
+        btn_show_tier.setStyleSheet("background-color: #FFA500; color: black;")
+        btn_show_tier.clicked.connect(lambda: self.set_name_visibility("TiePnt", True))
+        grid_types.addWidget(btn_show_tier, 2, 0)
+
+        btn_hide_tier = QPushButton("Hide")
+        btn_hide_tier.clicked.connect(lambda: self.set_name_visibility("TiePnt", False))
+        grid_types.addWidget(btn_hide_tier, 2, 1)
         
         group_types.setLayout(grid_types)
         layout.addWidget(group_types)
@@ -1631,12 +1641,12 @@ class VisualizationControlTab(QWidget):
             
             btn_show = QPushButton(f"Show {info['name']}")
             btn_show.setStyleSheet(f"background-color: rgb({info['rgb'][0]}, {info['rgb'][1]}, {info['rgb'][2]}); color: white;")
-            btn_show.clicked.connect(lambda p=prefix: self.set_suspension_visibility('substring', True, p))
+            btn_show.clicked.connect(lambda _checked=False, p=prefix: self.set_suspension_visibility('substring', True, p))
             h_category.addWidget(btn_show)
             
             btn_hide = QPushButton(f"Hide {info['name']}")
             btn_hide.setStyleSheet(f"background-color: rgb({info['rgb'][0]}, {info['rgb'][1]}, {info['rgb'][2]}); color: white;")
-            btn_hide.clicked.connect(lambda p=prefix: self.set_suspension_visibility('substring', False, p))
+            btn_hide.clicked.connect(lambda _checked=False, p=prefix: self.set_suspension_visibility('substring', False, p))
             h_category.addWidget(btn_hide)
             
             layout_categories.addLayout(h_category)
@@ -1695,9 +1705,13 @@ class VisualizationControlTab(QWidget):
         layout.addStretch()
         self.setLayout(layout)
     
-    def set_suspension_visibility(self, target, visible, filter_text=None):
+    def set_suspension_visibility(self, target, visible, filter_text=None, *extra_args):
         """Set suspension visibility."""
         try:
+            # Backward compatibility for older tie-rod token naming.
+            if isinstance(filter_text, str) and filter_text.upper().startswith("TIER"):
+                filter_text = "TiePnt"
+
             success = set_suspension_visibility(target, visible, filter_text)
             action = "Showing" if visible else "Hiding"
             target_text = f"{target} ({filter_text})" if filter_text else target
