@@ -7,34 +7,29 @@ namespace sw_drawer
 {
     public static class InsertCoordinate
     {
-        /// <summary>
-        /// Inserts or updates a coordinate system in the active SolidWorks document.
-        /// Uses ModifyDefinition to preserve feature ID when updating.
-        /// </summary>
-        public static bool InsertCoordinateSystem(
-            SldWorks swApp,
+        public static Feature InsertCoordinateSystemFeature(
+            ModelDoc2 swDoc,
             string name,
             double x, double y, double z,
-            double angleX = 0, double angleY = 0, double angleZ = 0)
+            double angleX = 0, double angleY = 0, double angleZ = 0,
+            bool createAtOrigin = true,
+            string folderName = "Coordinates",
+            bool hideInGui = false)
         {
-            ModelDoc2 swDoc = (ModelDoc2)swApp.ActiveDoc;
             if (swDoc == null)
             {
                 Console.WriteLine("No active document found.");
-                return false;
+                return null;
             }
 
             bool useRotation = (angleX != 0 || angleY != 0 || angleZ != 0);
 
-            // Convert mm -> meters, degrees -> radians
-            double deltaX = x / 1000.0;
-            double deltaY = y / 1000.0;
-            double deltaZ = z / 1000.0;
+            // Degrees -> radians for rotation
             double radX = angleX * Math.PI / 180.0;
             double radY = angleY * Math.PI / 180.0;
             double radZ = angleZ * Math.PI / 180.0;
 
-            // Check if coordinate system exists
+            // Check if coordinate system already exists
             bool exists = swDoc.Extension.SelectByID2(
                 name, "COORDSYS",
                 0, 0, 0,
@@ -44,130 +39,182 @@ namespace sw_drawer
 
             if (exists)
             {
-                // Get selected feature and modify it in place
                 SelectionMgr selMgr = (SelectionMgr)swDoc.SelectionManager;
-                Feature coordFeat = (Feature)selMgr.GetSelectedObject6(1, -1);
-                
-                if (coordFeat != null)
-                {
-                    CoordinateSystemFeatureData coordData = (CoordinateSystemFeatureData)coordFeat.GetDefinition();
-                    
-                    if (coordData != null)
-                    {
-                        bool accessOk = coordData.AccessSelections(swDoc, null);
-                        
-                        if (accessOk)
-                        {
-                            // Clear entity reference to allow numerical positioning
-                            coordData.OriginEntity = null;
-                            
-                            // Apply the changes
-                            bool modified = coordFeat.ModifyDefinition(coordData, swDoc, null);
-                            coordData.ReleaseSelectionAccess();
-                            
-                            if (modified)
-                            {
-                                swDoc.ClearSelection2(true);
-                                swDoc.EditRebuild3();
-                                
-                                Console.WriteLine(useRotation
-                                    ? $"Updated: '{name}' at ({x}, {y}, {z}) mm, angles ({angleX}, {angleY}, {angleZ}) deg."
-                                    : $"Updated: '{name}' at ({x}, {y}, {z}) mm.");
-                                return true;
-                            }
-                            else
-                            {
-                                Console.WriteLine($"ModifyDefinition failed for '{name}'.");
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"AccessSelections failed for '{name}'.");
-                        }
-                    }
-                }
-                
+                Feature existingFeat = (Feature)selMgr.GetSelectedObject6(1, -1);
                 swDoc.ClearSelection2(true);
-                return false;
+
+                if (existingFeat != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(folderName))
+                    {
+                        MoveFeatureToFolder(swDoc, existingFeat, folderName);
+                    }
+
+                    if (hideInGui)
+                    {
+                        HideReferenceGeometry(swDoc, existingFeat);
+                    }
+
+                    Console.WriteLine($"Coordinate system '{name}' already exists.");
+                    return existingFeat;
+                }
             }
 
             swDoc.ClearSelection2(true);
 
-            // Create new coordinate system using numerical values
+            double deltaX = createAtOrigin ? 0.0 : x / 1000.0; // mm -> m
+            double deltaY = createAtOrigin ? 0.0 : y / 1000.0;
+            double deltaZ = createAtOrigin ? 0.0 : z / 1000.0;
+
             Feature newFeat = swDoc.FeatureManager
                 .CreateCoordinateSystemUsingNumericalValues(
-                    true,           // UseLocation
-                    deltaX,         // DeltaX (meters)
-                    deltaY,         // DeltaY (meters)
-                    deltaZ,         // DeltaZ (meters)
-                    useRotation,    // UseRotation
-                    radX,           // AngleX (radians)
-                    radY,           // AngleY (radians)
-                    radZ            // AngleZ (radians)
+                    true,
+                    deltaX,
+                    deltaY,
+                    deltaZ,
+                    useRotation,
+                    radX,
+                    radY,
+                    radZ
                 ) as Feature;
 
             if (newFeat == null)
             {
                 Console.WriteLine($"Failed to create coordinate system '{name}'.");
-                return false;
+                return null;
             }
 
             newFeat.Name = name;
 
-            // Move to "Coordinates" folder (create if doesn't exist)
-            MoveToCoordinatesFolder(swDoc, newFeat);
+            if (!string.IsNullOrWhiteSpace(folderName))
+            {
+                MoveFeatureToFolder(swDoc, newFeat, folderName);
+            }
+
+            if (hideInGui)
+            {
+                HideReferenceGeometry(swDoc, newFeat);
+            }
 
             swDoc.EditRebuild3();
 
-            Console.WriteLine(useRotation
-                ? $"Created: '{name}' at ({x}, {y}, {z}) mm, angles ({angleX}, {angleY}, {angleZ}) deg."
-                : $"Created: '{name}' at ({x}, {y}, {z}) mm.");
+            if (createAtOrigin)
+            {
+                Console.WriteLine(useRotation
+                    ? $"Coordinate system '{name}' created at origin, angles ({angleX}, {angleY}, {angleZ}) deg."
+                    : $"Coordinate system '{name}' created at origin.");
+            }
+            else
+            {
+                Console.WriteLine(useRotation
+                    ? $"Coordinate system '{name}' created at ({x}, {y}, {z}) mm, angles ({angleX}, {angleY}, {angleZ}) deg."
+                    : $"Coordinate system '{name}' created at ({x}, {y}, {z}) mm.");
+            }
 
-            return true;
+            return newFeat;
         }
 
         /// <summary>
-        /// Moves a feature into the "Coordinates" folder, creating the folder if it doesn't exist.
+        /// Inserts or updates a coordinate system in the active SolidWorks document.
+        /// Creates at assembly origin (0,0,0) - position comes in pose step.
+        /// Rotation angles are applied immediately (for wheel toe/camber).
         /// </summary>
-        private static void MoveToCoordinatesFolder(ModelDoc2 swDoc, Feature feat)
+        public static bool InsertCoordinateSystem(
+            SldWorks swApp,
+            string name,
+            double x, double y, double z,
+            double angleX = 0, double angleY = 0, double angleZ = 0)
         {
-            const string folderName = "Coordinates";
+            ModelDoc2 swDoc = (ModelDoc2)swApp.ActiveDoc;
+            Feature feat = InsertCoordinateSystemFeature(
+                swDoc,
+                name,
+                x, y, z,
+                angleX, angleY, angleZ,
+                createAtOrigin: true,
+                folderName: "Coordinates",
+                hideInGui: false);
+            return feat != null;
+        }
+
+        /// <summary>
+        /// Moves a feature into a folder, creating it if it doesn't exist.
+        /// Uses IFeatureManager.InsertFeatureTreeFolder2 and MoveToFolder.
+        /// </summary>
+        private static void MoveFeatureToFolder(ModelDoc2 swDoc, Feature feat, string folderName)
+        {
             FeatureManager featMgr = swDoc.FeatureManager;
 
-            // Try to find existing "Coordinates" folder
-            Feature folder = null;
-            Feature swFeat = (Feature)swDoc.FirstFeature();
-            
-            while (swFeat != null)
-            {
-                if (swFeat.GetTypeName2() == "FtrFolder" && swFeat.Name == folderName)
-                {
-                    folder = swFeat;
-                    break;
-                }
-                swFeat = (Feature)swFeat.GetNextFeature();
-            }
+            // Search for existing folder
+            Feature folder = FindFolder(swDoc, folderName);
 
-            // Create folder if it doesn't exist
             if (folder == null)
             {
-                // Select the feature to create folder from it
+                // Select the new feature so the folder is created containing it
+                swDoc.ClearSelection2(true);
                 feat.Select2(false, 0);
-                folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
-                
+
+                folder = featMgr.InsertFeatureTreeFolder2(
+                    (int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing) as Feature;
+
                 if (folder != null)
                 {
                     folder.Name = folderName;
+                    Console.WriteLine($"Created folder '{folderName}'");
                 }
+                else
+                {
+                    Console.WriteLine($"Warning: could not create folder '{folderName}'");
+                }
+
                 swDoc.ClearSelection2(true);
             }
             else
             {
-                // Move feature into existing folder
+                // Select the feature and move it into the existing folder
+                swDoc.ClearSelection2(true);
                 feat.Select2(false, 0);
-                swDoc.Extension.ReorderFeature(feat.Name, folder.Name, (int)swMoveLocation_e.swMoveToFolder);
+
+                // IFeatureManager.MoveToFolder(DestFolderName, MoveFromFeat, IncludeChildren)
+                bool moved = featMgr.MoveToFolder(folderName, feat.Name, false);
+                if (!moved)
+                {
+                    Console.WriteLine($"Warning: could not move '{feat.Name}' into '{folderName}'");
+                }
+
                 swDoc.ClearSelection2(true);
             }
+        }
+
+        private static void HideReferenceGeometry(ModelDoc2 swDoc, Feature feat)
+        {
+            try
+            {
+                swDoc.ClearSelection2(true);
+                bool selected = feat.Select2(false, 0);
+                if (selected)
+                {
+                    swDoc.BlankRefGeom();
+                }
+                swDoc.ClearSelection2(true);
+            }
+            catch
+            {
+                try { swDoc.ClearSelection2(true); } catch { }
+            }
+        }
+
+        /// <summary>Finds a FtrFolder feature by name, or returns null.</summary>
+        private static Feature FindFolder(ModelDoc2 swDoc, string folderName)
+        {
+            Feature f = (Feature)swDoc.FirstFeature();
+            while (f != null)
+            {
+                if (f.GetTypeName2() == "FtrFolder" && f.Name == folderName)
+                    return f;
+                f = (Feature)f.GetNextFeature();
+            }
+            return null;
         }
     }
 }

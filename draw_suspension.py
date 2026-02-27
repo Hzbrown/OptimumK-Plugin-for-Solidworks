@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from solidworks_release import release_solidworks_command_state
 
 SCRIPT_DIR = os.path.dirname(__file__)
 TOOLS_EXE = os.path.join(SCRIPT_DIR, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe")
@@ -308,6 +309,9 @@ def create_all_markers_with_worker(radius_mm, worker=None):
     for line in process.stdout:
         if worker and worker._abort:
             process.terminate()
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
             print("Operation aborted by user")
             return False
         print(line.rstrip())
@@ -339,6 +343,9 @@ def delete_all_markers_with_worker(worker=None):
     for line in process.stdout:
         if worker and worker._abort:
             process.terminate()
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
             print("Operation aborted by user")
             return False
         print(line.rstrip())

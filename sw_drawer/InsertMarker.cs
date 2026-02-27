@@ -38,6 +38,7 @@ namespace sw_drawer
             { "wheel", new[] { 64, 64, 64 } },      // Dark Gray - Wheels
         };
 
+        private static readonly int[] TieRodColor = new[] { 255, 165, 0 }; // Orange (Tie Rod)
         private static readonly int[] DefaultColor = new[] { 128, 128, 128 }; // Gray default
 
 
@@ -121,6 +122,19 @@ namespace sw_drawer
         private static int[] GetColorForName(string name)
         {
             string upper = name.ToUpperInvariant();
+
+            // Tie rod tokens should take precedence over CHAS_/UPRI_ mixed names
+            // like CHAS_TiePnt_L and UPRI_TiePnt_R.
+            if (upper.Contains("TIER_") ||
+                upper.Contains("TIEROD") ||
+                upper.Contains("TIE_ROD") ||
+                upper.Contains("TIE ROD") ||
+                upper.Contains("TIEPNT") ||
+                upper.Contains("TIE_PNT"))
+            {
+                return TieRodColor;
+            }
+
             foreach (var kvp in ColorMap)
             {
                 if (upper.Contains(kvp.Key.ToUpperInvariant()))
@@ -221,7 +235,7 @@ namespace sw_drawer
             int existingCount = 0;
             foreach (var csInfo in coordSystems)
             {
-                string markerName = csInfo.Name + "_Marker";
+                            string markerName = csInfo.Name;
                 if (ComponentExists(swAssy, markerName))
                     existingCount++;
                 else
@@ -256,7 +270,9 @@ namespace sw_drawer
                 Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            swApp.CommandInProgress = true;
+            // Do NOT force CommandInProgress=true here. If the runner process is aborted,
+            // SolidWorks can remain UI-locked (feature tree not clickable).
+            // We rely on normal API calls without entering command-in-progress mode.
             swModel.ClearSelection2(true);
             swAssy.EditAssembly();
             swModel.ForceRebuild3(false);
@@ -319,7 +335,8 @@ namespace sw_drawer
                 Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            swApp.CommandInProgress = false;
+            // Ensure SolidWorks command mode is released (best effort).
+            try { swApp.CommandInProgress = false; } catch { }
 
             Console.WriteLine("STATE:PostProcessing");
             foreach (var item in workItems)
@@ -504,7 +521,6 @@ namespace sw_drawer
                 if (sel1)
                 {
                     // Add coincident mate
-                    int mateError = 0;
                     Mate2 mate = swAssy.AddMate5(
                         (int)swMateType_e.swMateCOINCIDENT,
                         (int)swMateAlign_e.swMateAlignALIGNED,
@@ -513,10 +529,20 @@ namespace sw_drawer
                         false,  // ForPositioningOnly
                         false,  // LockRotation
                         (int)swMateWidthOptions_e.swMateWidth_Centered,  // WidthMateOption
-                        out mateError);
+                        out int mateError);
 
                     if (mate != null && mateError == 0)
                     {
+                        Feature mateFeat = (Feature)swModel.FeatureByPositionReverse(0);
+                        if (mateFeat != null)
+                        {
+                            bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeat);
+                            if (axisAligned)
+                            {
+                                Console.WriteLine($"  Enabled coincident mate axis alignment for {csInfo.Name}");
+                            }
+                        }
+
                         Console.WriteLine($"  Added mate to {csInfo.Name}");
                     }
                     else
@@ -531,6 +557,312 @@ namespace sw_drawer
             {
                 Console.WriteLine($"  Note: Mate creation skipped: {ex.Message}");
                 swModel.ClearSelection2(true);
+            }
+        }
+
+        private static bool TryEnableCoincidentMateAxisAlignment(ModelDoc2 swModel, Feature mateFeature)
+        {
+            if (swModel == null || mateFeature == null)
+            {
+                return false;
+            }
+
+            // Macro-style first to mirror VBA behavior directly.
+            if (TryEnableCoincidentMateAxisAlignmentByMacro(swModel, mateFeature))
+            {
+                return true;
+            }
+
+            // Fallback: definition edit when macro-style call is unavailable.
+            return TryEnableCoincidentMateAxisAlignmentByDefinition(swModel, mateFeature);
+        }
+
+        private static bool TryEnableCoincidentMateAxisAlignmentByDefinition(ModelDoc2 swModel, Feature mateFeature)
+        {
+            try
+            {
+                object mateDefinition = mateFeature.GetDefinition();
+                if (mateDefinition == null)
+                {
+                    return false;
+                }
+
+                Type definitionType = mateDefinition.GetType();
+                var accessSelections = definitionType.GetMethod("AccessSelections");
+                bool selectionAccessOpen = false;
+
+                if (accessSelections != null)
+                {
+                    object accessResult = accessSelections.Invoke(mateDefinition, new object[] { swModel, null });
+                    if (accessResult is bool && !(bool)accessResult)
+                    {
+                        return false;
+                    }
+                    selectionAccessOpen = true;
+                }
+
+                bool changed = false;
+                changed |= TrySetIntProperty(
+                    mateDefinition,
+                    "MateAlignment",
+                    (int)swMateAlign_e.swMateAlignALIGNED);
+                changed |= TrySetBooleanProperty(mateDefinition, "AlignAxes", true);
+                changed |= TrySetBooleanProperty(mateDefinition, "AlignAxis", true);
+
+                if (!changed)
+                {
+                    if (selectionAccessOpen)
+                    {
+                        var releaseSelections = definitionType.GetMethod("ReleaseSelectionAccess");
+                        releaseSelections?.Invoke(mateDefinition, null);
+                    }
+                    return false;
+                }
+
+                bool modified = mateFeature.ModifyDefinition(mateDefinition, swModel, null);
+
+                if (selectionAccessOpen)
+                {
+                    var releaseSelections = definitionType.GetMethod("ReleaseSelectionAccess");
+                    releaseSelections?.Invoke(mateDefinition, null);
+                }
+
+                return modified;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryEnableCoincidentMateAxisAlignmentByMacro(ModelDoc2 swModel, Feature mateFeature)
+        {
+            try
+            {
+                string mateName = mateFeature.Name;
+                if (string.IsNullOrWhiteSpace(mateName))
+                {
+                    return false;
+                }
+
+                swModel.ClearSelection2(true);
+                bool selected = swModel.Extension.SelectByID2(
+                    mateName,
+                    "MATE",
+                    0, 0, 0,
+                    false,
+                    0,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (!selected)
+                {
+                    swModel.ClearSelection2(true);
+                    return false;
+                }
+
+                object modelObject = swModel;
+                Type modelType = modelObject.GetType();
+                System.Reflection.MethodInfo[] methods = modelType.GetMethods();
+
+                for (int i = 0; i < methods.Length; i++)
+                {
+                    System.Reflection.MethodInfo method = methods[i];
+                    if (!string.Equals(method.Name, "AddMate5", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    System.Reflection.ParameterInfo[] parameters = method.GetParameters();
+                    if (!TryBuildMacroAddMate5Arguments(parameters, out object[] args, out int errorIndex))
+                    {
+                        continue;
+                    }
+
+                    object invokeResult;
+                    try
+                    {
+                        invokeResult = method.Invoke(modelObject, args);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    int errorStatus = 0;
+                    if (errorIndex >= 0 && errorIndex < args.Length && args[errorIndex] is int)
+                    {
+                        errorStatus = (int)args[errorIndex];
+                    }
+
+                    if (invokeResult != null && errorStatus == 0)
+                    {
+                        swModel.ClearSelection2(true);
+                        return true;
+                    }
+                }
+
+                swModel.ClearSelection2(true);
+                return false;
+            }
+            catch
+            {
+                try { swModel.ClearSelection2(true); } catch { }
+                return false;
+            }
+        }
+
+        private static bool TryBuildMacroAddMate5Arguments(
+            System.Reflection.ParameterInfo[] parameters,
+            out object[] args,
+            out int errorIndex)
+        {
+            args = null;
+            errorIndex = -1;
+
+            if (parameters == null || parameters.Length == 0)
+            {
+                return false;
+            }
+
+            int[] intValues = new[]
+            {
+                (int)swMateType_e.swMateCOORDINATE,
+                (int)swMateAlign_e.swMateAlignALIGNED,
+                0
+            };
+
+            bool[] boolValues = new[]
+            {
+                false,
+                false,
+                false,
+                false
+            };
+
+            double[] doubleValues = new[]
+            {
+                0.0,
+                0.001, 0.001, 0.001, 0.001,
+                0.5235987755983, 0.5235987755983, 0.5235987755983
+            };
+
+            int intCursor = 0;
+            int boolCursor = 0;
+            int doubleCursor = 0;
+
+            args = new object[parameters.Length];
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                Type paramType = parameters[i].ParameterType;
+                Type elementType = paramType.IsByRef ? paramType.GetElementType() : paramType;
+
+                if (parameters[i].IsOut || (paramType.IsByRef && elementType == typeof(int)))
+                {
+                    args[i] = 0;
+                    errorIndex = i;
+                    continue;
+                }
+
+                if (elementType == typeof(int))
+                {
+                    args[i] = intCursor < intValues.Length ? intValues[intCursor++] : 0;
+                    continue;
+                }
+
+                if (elementType == typeof(bool))
+                {
+                    args[i] = boolCursor < boolValues.Length ? boolValues[boolCursor++] : false;
+                    continue;
+                }
+
+                if (elementType == typeof(double))
+                {
+                    args[i] = doubleCursor < doubleValues.Length ? doubleValues[doubleCursor++] : 0.0;
+                    continue;
+                }
+
+                if (elementType == typeof(object))
+                {
+                    args[i] = null;
+                    continue;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TrySetBooleanProperty(object target, string propertyName, bool value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(propertyName))
+            {
+                return false;
+            }
+
+            try
+            {
+                var propertyInfo = target.GetType().GetProperty(
+                    propertyName,
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.IgnoreCase);
+
+                if (propertyInfo == null || !propertyInfo.CanWrite || propertyInfo.PropertyType != typeof(bool))
+                {
+                    return false;
+                }
+
+                propertyInfo.SetValue(target, value, null);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TrySetIntProperty(object target, string propertyName, int value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(propertyName))
+            {
+                return false;
+            }
+
+            try
+            {
+                var propertyInfo = target.GetType().GetProperty(
+                    propertyName,
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.IgnoreCase);
+
+                if (propertyInfo == null || !propertyInfo.CanWrite)
+                {
+                    return false;
+                }
+
+                Type propertyType = propertyInfo.PropertyType;
+                if (propertyType == typeof(int))
+                {
+                    propertyInfo.SetValue(target, value, null);
+                    return true;
+                }
+
+                if (propertyType.IsEnum)
+                {
+                    object enumValue = Enum.ToObject(propertyType, value);
+                    propertyInfo.SetValue(target, enumValue, null);
+                    return true;
+                }
+
+                return false;
+            }
+            catch
+            {
+                return false;
             }
         }
 
