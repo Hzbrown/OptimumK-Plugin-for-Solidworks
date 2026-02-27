@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj": {}
+    "c:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj": {}
   },
   "projects": {
-    "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj": {
+    "c:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj",
+        "projectUniqueName": "c:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj",
         "projectName": "SuspensionTools",
-        "projectPath": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj",
+        "projectPath": "c:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\sw_drawer.csproj",
         "packagesPath": "C:\\Users\\harri\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\obj\\",
+        "outputPath": "c:\\Users\\harri\\OptimumK Plugin for Solidworks\\sw_drawer\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

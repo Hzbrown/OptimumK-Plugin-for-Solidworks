@@ -14,7 +14,7 @@ from coordinate_insertion import CoordinateInsertionWorker, insert_coordinates, 
 from pose_creation import PoseCreationWorker, insert_pose, validate_pose_name, get_existing_poses
 from visualization_control import VisualizationWorker, set_suspension_visibility, set_marker_visibility, get_visualization_controls, get_color_coding_info
 from optimumSheetParser import OptimumSheetParser
-from test_solidworks_connection import get_active_document_name
+from test_solidworks_connection import get_active_document_name, get_active_assembly_and_configuration
 from draw_suspension import (
     load_json, count_hardpoints, count_wheels,
     draw_full_suspension, draw_front_suspension, draw_rear_suspension,
@@ -524,6 +524,10 @@ class ViewTab(QWidget):
         
         # Title
         layout.addWidget(QLabel("Control Visibility of Suspension Features"))
+
+        btn_test_connection = QPushButton("Test SolidWorks Connection")
+        btn_test_connection.clicked.connect(self.test_solidworks_connection)
+        layout.addWidget(btn_test_connection)
         
         # Status/console output
         self.status_text = QTextEdit()
@@ -665,6 +669,16 @@ class ViewTab(QWidget):
         except Exception as e:
             self.status_text.append(f"✗ Error: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed: {str(e)}")
+
+    def test_solidworks_connection(self):
+        """Test SolidWorks connection and print active assembly/configuration."""
+        try:
+            assembly_name, config_name = get_active_assembly_and_configuration()
+            self.status_text.append("✓ SolidWorks connection successful")
+            self.status_text.append(f"✓ Active assembly: {assembly_name}")
+            self.status_text.append(f"✓ Active configuration: {config_name}")
+        except Exception as e:
+            self.status_text.append(f"✗ Connection failed: {str(e)}")
     
     def show_custom(self):
         """Show features matching custom filter."""
@@ -1017,6 +1031,10 @@ class CoordinateInsertionTab(QWidget):
         # Title
         layout.addWidget(QLabel("Insert Coordinates"))
         layout.addWidget(QLabel("Creates virtual hardpoint markers from JSON with automatic folder organization"))
+
+        btn_test_connection = QPushButton("Test SolidWorks Connection")
+        btn_test_connection.clicked.connect(self.test_solidworks_connection)
+        layout.addWidget(btn_test_connection)
         
         # State label
         self.state_label = QLabel("")
@@ -1149,6 +1167,16 @@ class CoordinateInsertionTab(QWidget):
     def append_log(self, text):
         """Append text to log."""
         self.status_text.append(text)
+
+    def test_solidworks_connection(self):
+        """Test SolidWorks connection and print active assembly/configuration."""
+        try:
+            assembly_name, config_name = get_active_assembly_and_configuration()
+            self.status_text.append("✓ SolidWorks connection successful")
+            self.status_text.append(f"✓ Active assembly: {assembly_name}")
+            self.status_text.append(f"✓ Active configuration: {config_name}")
+        except Exception as e:
+            self.status_text.append(f"✗ Connection failed: {str(e)}")
     
     def abort_operation(self):
         """Abort the current operation."""
@@ -1352,6 +1380,10 @@ class PoseCreationTab(QWidget):
         # Title
         layout.addWidget(QLabel("Write Pose"))
         layout.addWidget(QLabel("Create coordinate systems and mates for pose configurations"))
+
+        btn_test_connection = QPushButton("Test SolidWorks Connection")
+        btn_test_connection.clicked.connect(self.test_solidworks_connection)
+        layout.addWidget(btn_test_connection)
         
         # State label
         self.state_label = QLabel("")
@@ -1458,6 +1490,16 @@ class PoseCreationTab(QWidget):
     def append_log(self, text):
         """Append text to log."""
         self.status_text.append(text)
+
+    def test_solidworks_connection(self):
+        """Test SolidWorks connection and print active assembly/configuration."""
+        try:
+            assembly_name, config_name = get_active_assembly_and_configuration()
+            self.status_text.append("✓ SolidWorks connection successful")
+            self.status_text.append(f"✓ Active assembly: {assembly_name}")
+            self.status_text.append(f"✓ Active configuration: {config_name}")
+        except Exception as e:
+            self.status_text.append(f"✗ Connection failed: {str(e)}")
     
     def abort_operation(self):
         """Abort the current operation."""

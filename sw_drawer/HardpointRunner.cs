@@ -1412,7 +1412,7 @@ namespace sw_drawer
                     "COORDSYS",
                     0, 0, 0,
                     true,
-                    2,
+                    1,
                     null,
                     (int)swSelectOption_e.swSelectOptionDefault);
 
@@ -1423,22 +1423,22 @@ namespace sw_drawer
                     return;
                 }
 
-                int mateError;
                 Mate2 mate = swAssy.AddMate5(
-                    (int)swMateType_e.swMateCOINCIDENT,
-                    (int)swMateAlign_e.swMateAlignALIGNED,
-                    false,
-                    0, 0, 0, 0, 0, 0, 0, 0,
-                    false,
-                    false,
-                    (int)swMateWidthOptions_e.swMateWidth_Centered,
-                    out mateError);
+                    (int)swMateType_e.swMateCOORDINATE,        // 20
+                    (int)swMateAlign_e.swMateAlignALIGNED,     // 0 (aligned)
+                    false,                                     // Flip
+                    0,                                         // Distance
+                    0.001, 0.001,                              // DistanceAbsMin, DistanceAbsMax
+                    0.001, 0.001,                              // GearRatioNumerator, GearRatioDenominator
+                    0.5235987755983,                           // Angle (30 deg in radians)
+                    0.5235987755983, 0.5235987755983,          // AngleAbsMin, AngleAbsMax
+                    false,                                     // ForPositioningOnly
+                    false,                                     // LockRotation
+                    0,                                         // WidthMateOption
+                    out int mateError
+                );
 
-                if (mate == null || mateError != 0)
-                {
-                    // Intentionally silent on mate failure here.
-                }
-                else
+                if (mate != null && mateError == 0)
                 {
                     Feature mateFeature = (Feature)swModel.FeatureByPositionReverse(0);
 
@@ -1583,6 +1583,19 @@ namespace sw_drawer
                 return false;
             }
 
+            // Macro-style first: select mate + redraw + AddMate5 with macro-like arguments.
+            if (TryEnableCoincidentMateAxisAlignmentByMacro(swModel, mateFeature))
+            {
+                return true;
+            }
+
+            // Fallback to direct mate definition edit for environments where macro-style
+            // invocation is unavailable.
+            return TryEnableCoincidentMateAxisAlignmentByDefinition(swModel, mateFeature);
+        }
+
+        private static bool TryEnableCoincidentMateAxisAlignmentByDefinition(ModelDoc2 swModel, Feature mateFeature)
+        {
             try
             {
                 object mateDefinition = mateFeature.GetDefinition();
@@ -1633,11 +1646,171 @@ namespace sw_drawer
 
                 return modified;
             }
-            catch (Exception ex)
+            catch
             {
-                Console.WriteLine($"Warning: Could not enable coincident mate axis alignment: {ex.Message}");
                 return false;
             }
+        }
+
+        private static bool TryEnableCoincidentMateAxisAlignmentByMacro(ModelDoc2 swModel, Feature mateFeature)
+        {
+            try
+            {
+                string mateName = mateFeature.Name;
+                if (string.IsNullOrWhiteSpace(mateName))
+                {
+                    return false;
+                }
+
+                swModel.ClearSelection2(true);
+                bool selected = swModel.Extension.SelectByID2(
+                    mateName,
+                    "MATE",
+                    0, 0, 0,
+                    false,
+                    0,
+                    null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+
+                if (!selected)
+                {
+                    swModel.ClearSelection2(true);
+                    return false;
+                }
+
+                object modelObject = swModel;
+                Type modelType = modelObject.GetType();
+                System.Reflection.MethodInfo[] methods = modelType.GetMethods();
+
+                for (int i = 0; i < methods.Length; i++)
+                {
+                    System.Reflection.MethodInfo method = methods[i];
+                    if (!string.Equals(method.Name, "AddMate5", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    System.Reflection.ParameterInfo[] parameters = method.GetParameters();
+                    if (!TryBuildMacroAddMate5Arguments(parameters, out object[] args, out int errorIndex))
+                    {
+                        continue;
+                    }
+
+                    object invokeResult;
+                    try
+                    {
+                        invokeResult = method.Invoke(modelObject, args);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    int errorStatus = 0;
+                    if (errorIndex >= 0 && errorIndex < args.Length && args[errorIndex] is int)
+                    {
+                        errorStatus = (int)args[errorIndex];
+                    }
+
+                    if (invokeResult != null && errorStatus == 0)
+                    {
+                        swModel.ClearSelection2(true);
+                        return true;
+                    }
+                }
+
+                swModel.ClearSelection2(true);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Macro-style mate alignment fallback failed: {ex.Message}");
+                try { swModel.ClearSelection2(true); } catch { }
+                return false;
+            }
+        }
+
+        private static bool TryBuildMacroAddMate5Arguments(
+            System.Reflection.ParameterInfo[] parameters,
+            out object[] args,
+            out int errorIndex)
+        {
+            args = null;
+            errorIndex = -1;
+
+            if (parameters == null || parameters.Length == 0)
+            {
+                return false;
+            }
+
+            int[] intValues = new[]
+            {
+                (int)swMateType_e.swMateCOORDINATE,
+                (int)swMateAlign_e.swMateAlignALIGNED,
+                0
+            };
+
+            bool[] boolValues = new[]
+            {
+                false, // Flip
+                false, // ForPositioningOnly
+                false, // LockRotation
+                false  // Legacy extra bool in some AddMate5 signatures
+            };
+
+            double[] doubleValues = new[]
+            {
+                0.0,
+                0.001, 0.001, 0.001, 0.001,
+                0.5235987755983, 0.5235987755983, 0.5235987755983
+            };
+
+            int intCursor = 0;
+            int boolCursor = 0;
+            int doubleCursor = 0;
+
+            args = new object[parameters.Length];
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                Type paramType = parameters[i].ParameterType;
+                Type elementType = paramType.IsByRef ? paramType.GetElementType() : paramType;
+
+                if (parameters[i].IsOut || (paramType.IsByRef && elementType == typeof(int)))
+                {
+                    args[i] = 0;
+                    errorIndex = i;
+                    continue;
+                }
+
+                if (elementType == typeof(int))
+                {
+                    args[i] = intCursor < intValues.Length ? intValues[intCursor++] : 0;
+                    continue;
+                }
+
+                if (elementType == typeof(bool))
+                {
+                    args[i] = boolCursor < boolValues.Length ? boolValues[boolCursor++] : false;
+                    continue;
+                }
+
+                if (elementType == typeof(double))
+                {
+                    args[i] = doubleCursor < doubleValues.Length ? doubleValues[doubleCursor++] : 0.0;
+                    continue;
+                }
+
+                if (elementType == typeof(object))
+                {
+                    args[i] = null;
+                    continue;
+                }
+
+                return false;
+            }
+
+            return true;
         }
 
         private static bool TrySetBooleanProperty(object target, string propertyName, bool value)
@@ -2254,7 +2427,7 @@ namespace sw_drawer
                     false,  // Flip
                     0, 0, 0, 0, 0, 0, 0, 0,  // Distances and angles (11 doubles total)
                     false,  // ForPositioningOnly
-                    false,  // LockRotation
+                    true,   // LockRotation
                     (int)swMateWidthOptions_e.swMateWidth_Centered,  // WidthMateOption
                     out int mateError);
 
@@ -2537,7 +2710,7 @@ namespace sw_drawer
                     false,  // Flip
                     0, 0, 0, 0, 0, 0, 0, 0,  // Distances and angles (11 doubles total)
                     false,  // ForPositioningOnly
-                    false,  // LockRotation
+                    true,   // LockRotation
                     (int)swMateWidthOptions_e.swMateWidth_Centered,  // WidthMateOption
                     out int mateError);
 
