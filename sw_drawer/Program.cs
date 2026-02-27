@@ -18,6 +18,7 @@ namespace sw_drawer
             }
 
             string command = args[0].ToLowerInvariant();
+            bool shouldEnsureReleased = command == "marker" || command == "hardpoints" || command == "release";
 
             try
             {
@@ -25,6 +26,10 @@ namespace sw_drawer
 
                 switch (command)
                 {
+                    case "release":
+                        success = RunReleaseCommand();
+                        break;
+
                     case "marker":
                         success = InsertMarker.Run(args);
                         break;
@@ -111,6 +116,13 @@ namespace sw_drawer
                 Console.WriteLine($"Error: {ex.Message}");
                 return 1;
             }
+            finally
+            {
+                if (shouldEnsureReleased)
+                {
+                    TryReleaseSolidWorksCommandState(false);
+                }
+            }
         }
 
         static void PrintUsage()
@@ -121,6 +133,79 @@ namespace sw_drawer
             Console.WriteLine("  SuspensionTools.exe <name> <x> <y> <z> [rx] [ry] [rz]  - Insert coordinate system");
             Console.WriteLine("  SuspensionTools.exe marker <command> [args]            - Marker operations");
             Console.WriteLine("  SuspensionTools.exe vis <command> [args]               - Visibility control");
+            Console.WriteLine("  SuspensionTools.exe release                            - Release SolidWorks command state");
+        }
+
+        static bool RunReleaseCommand()
+        {
+            return TryReleaseSolidWorksCommandState(true);
+        }
+
+        static bool TryReleaseSolidWorksCommandState(bool verbose)
+        {
+            SldWorks swApp;
+            try
+            {
+                swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
+            }
+            catch
+            {
+                if (verbose)
+                {
+                    Console.WriteLine("Error: SolidWorks not running");
+                }
+                return false;
+            }
+
+            bool success = true;
+
+            try
+            {
+                swApp.CommandInProgress = false;
+                if (verbose)
+                {
+                    Console.WriteLine("SolidWorks CommandInProgress reset");
+                }
+            }
+            catch (Exception ex)
+            {
+                success = false;
+                if (verbose)
+                {
+                    Console.WriteLine($"Warning: Failed to reset CommandInProgress: {ex.Message}");
+                }
+            }
+
+            try
+            {
+                ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+                if (swModel != null)
+                {
+                    try { swModel.ClearSelection2(true); } catch { }
+
+                    try
+                    {
+                        if (swModel.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
+                        {
+                            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+                            swAssy.EditAssembly();
+                        }
+                    }
+                    catch { }
+
+                    try { swModel.EditRebuild3(); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                success = false;
+                if (verbose)
+                {
+                    Console.WriteLine($"Warning: Failed to normalize active document state: {ex.Message}");
+                }
+            }
+
+            return success;
         }
 
         static bool InsertCoordinateSystem(string[] args)
@@ -195,7 +280,7 @@ namespace sw_drawer
         {
             if (args.Length < 3)
             {
-                Console.WriteLine("Usage: vis <all|front|rear|substring> <show|hide> [param]");
+                Console.WriteLine("Usage: vis <all|front|rear|wheels|frontwheels|rearwheels|chassis|nonchassis|substring|feature> <show|hide> [param]");
                 return false;
             }
 
@@ -210,62 +295,310 @@ namespace sw_drawer
             ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
             if (swModel == null) { Console.WriteLine("Error: No active document"); return false; }
 
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                Console.WriteLine("Error: Active document must be an assembly for component visibility control");
+                return false;
+            }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+
+            if (target == "substring" && string.IsNullOrWhiteSpace(param))
+            {
+                Console.WriteLine("Usage: vis substring <show|hide> <text>");
+                return false;
+            }
+
+            if (target == "feature" && string.IsNullOrWhiteSpace(param))
+            {
+                Console.WriteLine("Usage: vis feature <show|hide> <name>");
+                return false;
+            }
+
+            Func<string, bool> matcher;
+            switch (target)
+            {
+                case "all":
+                    matcher = IsHardpointLikeName;
+                    break;
+                case "front":
+                    matcher = name => IsFrontLikeName(name);
+                    break;
+                case "rear":
+                    matcher = name => IsRearLikeName(name);
+                    break;
+                case "wheels":
+                    matcher = name => IsWheelLikeName(name);
+                    break;
+                case "frontwheels":
+                    matcher = name => IsWheelLikeName(name) && IsFrontLikeName(name);
+                    break;
+                case "rearwheels":
+                    matcher = name => IsWheelLikeName(name) && IsRearLikeName(name);
+                    break;
+                case "chassis":
+                    matcher = name => IsChassisLikeName(name);
+                    break;
+                case "nonchassis":
+                    matcher = name => IsHardpointLikeName(name) && !IsChassisLikeName(name);
+                    break;
+                case "substring":
+                    matcher = name => name.IndexOf(param, StringComparison.OrdinalIgnoreCase) >= 0;
+                    break;
+                case "feature":
+                    matcher = name => string.Equals(name, param, StringComparison.OrdinalIgnoreCase);
+                    break;
+                default:
+                    Console.WriteLine($"Unknown visibility target: {target}");
+                    return false;
+            }
+
+            int componentCount = SetMatchingComponentVisibility(swModel, swAssy, visible, matcher);
+            int coordinateCount = SetMatchingCoordinateVisibility(swModel, visible, matcher);
+
+            Console.WriteLine($"{componentCount + coordinateCount} items {(visible ? "shown" : "hidden")} " +
+                              $"({componentCount} components, {coordinateCount} coordinate systems)");
+            return true;
+        }
+
+        static int SetMatchingComponentVisibility(ModelDoc2 swModel, AssemblyDoc swAssy, bool visible, Func<string, bool> matcher)
+        {
+            if (swModel == null)
+            {
+                return 0;
+            }
+
+            object componentsObj = swAssy.GetComponents(false);
+            object[] components = componentsObj as object[];
+            if (components == null || matcher == null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+
+            foreach (object obj in components)
+            {
+                Component2 comp = obj as Component2;
+                if (comp == null)
+                {
+                    continue;
+                }
+
+                string normalized = NormalizeComponentName(comp.Name2);
+                if (!matcher(normalized))
+                {
+                    continue;
+                }
+
+                if (TrySetComponentVisibility(swModel, comp, visible))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        static bool TrySetComponentVisibility(ModelDoc2 swModel, Component2 comp, bool visible)
+        {
+            if (swModel == null || comp == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                swModel.ClearSelection2(true);
+                bool selected = comp.Select4(false, null, false);
+                if (!selected)
+                {
+                    return false;
+                }
+
+                // Requested behavior: hide/show selected components via ModelDoc2 APIs.
+                if (visible)
+                {
+                    swModel.ShowComponent2();
+                }
+                else
+                {
+                    swModel.HideComponent2();
+                }
+                swModel.ClearSelection2(true);
+                return true;
+            }
+            catch
+            {
+                // Fall through to compatibility paths.
+            }
+
+            int visibilityState = visible
+                ? (int)swComponentVisibilityState_e.swComponentVisible
+                : (int)swComponentVisibilityState_e.swComponentHidden;
+
+            // Compatibility API path: IComponent2.SetVisibility(...)
+            try
+            {
+                comp.SetVisibility(
+                    visibilityState,
+                    (int)swInConfigurationOpts_e.swThisConfiguration,
+                    null);
+                return true;
+            }
+            catch
+            {
+                // Fall through to property setter for broader compatibility.
+            }
+
+            // Fallback API path: IComponent2.Visible property
+            try
+            {
+                comp.Visible = visibilityState;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static int SetMatchingCoordinateVisibility(ModelDoc2 swModel, bool visible, Func<string, bool> matcher)
+        {
+            if (swModel == null || matcher == null)
+            {
+                return 0;
+            }
+
             int count = 0;
             Feature feat = (Feature)swModel.FirstFeature();
             while (feat != null)
             {
-                string name = feat.Name;
-                bool shouldModify = false;
-
-                switch (target)
-                {
-                    case "all":
-                        shouldModify = name.Contains("_FRONT") || name.Contains("_REAR") || name.Contains("_wheel");
-                        break;
-                    case "front":
-                        shouldModify = name.Contains("_FRONT") || name.StartsWith("FL_") || name.StartsWith("FR_");
-                        break;
-                    case "rear":
-                        shouldModify = name.Contains("_REAR") || name.StartsWith("RL_") || name.StartsWith("RR_");
-                        break;
-                    case "wheels":
-                        shouldModify = name.Contains("_wheel");
-                        break;
-                    case "frontwheels":
-                        shouldModify = name.StartsWith("FL_") || name.StartsWith("FR_");
-                        break;
-                    case "rearwheels":
-                        shouldModify = name.StartsWith("RL_") || name.StartsWith("RR_");
-                        break;
-                    case "chassis":
-                        shouldModify = name.Contains("CHAS_");
-                        break;
-                    case "nonchassis":
-                        shouldModify = (name.Contains("_FRONT") || name.Contains("_REAR")) && !name.Contains("CHAS_");
-                        break;
-                    case "substring":
-                        shouldModify = param != null && name.IndexOf(param, StringComparison.OrdinalIgnoreCase) >= 0;
-                        break;
-                }
-
-                if (shouldModify && feat.GetTypeName2() == "CoordSys")
+                string name = feat.Name ?? string.Empty;
+                if (feat.GetTypeName2() == "CoordSys" && matcher(name))
                 {
                     try
                     {
-                        feat.SetSuppression2(
+                        bool updated = feat.SetSuppression2(
                             visible ? (int)swFeatureSuppressionAction_e.swUnSuppressFeature
                                     : (int)swFeatureSuppressionAction_e.swSuppressFeature,
-                            (int)swInConfigurationOpts_e.swThisConfiguration, null);
-                        count++;
+                            (int)swInConfigurationOpts_e.swThisConfiguration,
+                            null);
+                        if (updated)
+                        {
+                            count++;
+                        }
                     }
-                    catch { }
+                    catch
+                    {
+                        // Ignore per-feature failures.
+                    }
                 }
 
                 feat = (Feature)feat.GetNextFeature();
             }
 
-            Console.WriteLine($"{count} features {(visible ? "shown" : "hidden")}");
-            return true;
+            return count;
+        }
+
+        static bool IsHardpointLikeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            return name.IndexOf("_FRONT", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("_REAR", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("_wheel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.StartsWith("FL_", StringComparison.OrdinalIgnoreCase) ||
+                   name.StartsWith("FR_", StringComparison.OrdinalIgnoreCase) ||
+                   name.StartsWith("RL_", StringComparison.OrdinalIgnoreCase) ||
+                   name.StartsWith("RR_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsWheelLikeName(string name)
+        {
+            return !string.IsNullOrWhiteSpace(name) &&
+                   name.IndexOf("_wheel", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        static bool IsFrontLikeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            return name.IndexOf("_FRONT", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.StartsWith("FL_", StringComparison.OrdinalIgnoreCase) ||
+                   name.StartsWith("FR_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsRearLikeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            return name.IndexOf("_REAR", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.StartsWith("RL_", StringComparison.OrdinalIgnoreCase) ||
+                   name.StartsWith("RR_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsChassisLikeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            return name.IndexOf("CHAS_", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("Chassis", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        static string NormalizeComponentName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return string.Empty;
+            }
+
+            string normalized = name.Trim();
+
+            int caretIdx = normalized.IndexOf('^');
+            if (caretIdx > 0)
+            {
+                normalized = normalized.Substring(0, caretIdx);
+            }
+
+            int angleIdx = normalized.IndexOf('<');
+            if (angleIdx > 0)
+            {
+                normalized = normalized.Substring(0, angleIdx);
+            }
+
+            int dashIdx = normalized.LastIndexOf('-');
+            if (dashIdx > 0 && dashIdx < normalized.Length - 1)
+            {
+                bool numericSuffix = true;
+                for (int i = dashIdx + 1; i < normalized.Length; i++)
+                {
+                    if (!char.IsDigit(normalized[i]))
+                    {
+                        numericSuffix = false;
+                        break;
+                    }
+                }
+
+                if (numericSuffix)
+                {
+                    normalized = normalized.Substring(0, dashIdx);
+                }
+            }
+
+            return normalized.Trim();
         }
     }
 }

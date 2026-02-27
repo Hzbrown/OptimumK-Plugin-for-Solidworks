@@ -256,7 +256,9 @@ namespace sw_drawer
                 Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            swApp.CommandInProgress = true;
+            // Do NOT force CommandInProgress=true here. If the runner process is aborted,
+            // SolidWorks can remain UI-locked (feature tree not clickable).
+            // We rely on normal API calls without entering command-in-progress mode.
             swModel.ClearSelection2(true);
             swAssy.EditAssembly();
             swModel.ForceRebuild3(false);
@@ -319,7 +321,8 @@ namespace sw_drawer
                 Console.WriteLine($"PROGRESS:{progressCount}");
             }
 
-            swApp.CommandInProgress = false;
+            // Ensure SolidWorks command mode is released (best effort).
+            try { swApp.CommandInProgress = false; } catch { }
 
             Console.WriteLine("STATE:PostProcessing");
             foreach (var item in workItems)

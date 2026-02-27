@@ -3,6 +3,7 @@ import sys
 import json
 import subprocess
 from PyQt5.QtCore import QThread, pyqtSignal, QObject
+from solidworks_release import release_solidworks_command_state
 
 class PoseCreationWorker(QThread):
     """Worker thread for pose creation operations."""
@@ -32,6 +33,11 @@ class PoseCreationWorker(QThread):
                     self._process.kill()
                 except:
                     pass
+
+        if self._process is not None:
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
 
     def parse_output_line(self, line):
         """Parse special output lines for progress and state."""
@@ -158,10 +164,16 @@ def insert_pose(json_path, pose_name, worker=None, progress_callback=None):
     for line in process.stdout:
         if worker and worker._abort:
             process.terminate()
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
             print("Operation aborted by user")
             return False
         elif progress_callback and hasattr(progress_callback, '_abort') and progress_callback._abort:
             process.terminate()
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
             print("Operation aborted by user")
             return False
         print(line.rstrip())

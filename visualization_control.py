@@ -108,19 +108,29 @@ def get_suspension_tools_exe():
     
     # Check multiple possible locations
     paths_to_check = [
+        # Preferred modern output name
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
+
+        # Legacy/alternate output names
         os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Release", "net6.0", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net6.0", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Release", "net8.0", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net8.0", "sw_drawer.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Release", "SuspensionTools.exe"),
+        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "SuspensionTools.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Release", "sw_drawer.exe"),
         os.path.join(script_dir, "sw_drawer", "bin", "Debug", "sw_drawer.exe"),
     ]
-    
-    for path in paths_to_check:
-        if os.path.exists(path):
-            return path
+
+    existing = [path for path in paths_to_check if os.path.exists(path)]
+    if existing:
+        # Prefer SuspensionTools.exe when available to avoid stale legacy executables.
+        preferred = [p for p in existing if os.path.basename(p).lower() == "suspensiontools.exe"]
+        candidates = preferred if preferred else existing
+        return max(candidates, key=os.path.getmtime)
     
     raise FileNotFoundError(
         "sw_drawer.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"

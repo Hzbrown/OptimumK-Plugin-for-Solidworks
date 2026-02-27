@@ -389,7 +389,17 @@ namespace sw_drawer
                 double yBase = halfTrack + lateralOffset;
                 double z     = tireDiameter / 2.0 + verticalOffset;
 
-                string prefix = isRear ? "R" : "F";
+                // IMPORTANT:
+                // Derive wheel naming from suffix, not caller-provided bool, to prevent
+                // mixed names like RL_wheel_FRONT / FL_wheel_REAR when a caller passes
+                // an incorrect rear/front flag.
+                bool suffixIsRear = string.Equals(suffix, "_REAR", StringComparison.OrdinalIgnoreCase);
+                if (isRear != suffixIsRear)
+                {
+                    Console.WriteLine($"Warning: Wheel extraction flag mismatch (isRear={isRear}, suffix='{suffix}'). Using suffix for naming.");
+                }
+
+                string prefix = suffixIsRear ? "R" : "F";
 
                 // Left wheel (positive Y)
                 hardpoints.Add(new HardpointInfo

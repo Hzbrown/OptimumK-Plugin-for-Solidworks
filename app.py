@@ -26,6 +26,7 @@ from draw_suspension import (
     set_marker_visibility_by_name,
     create_all_markers_with_worker, delete_all_markers_with_worker
 )
+from solidworks_release import release_solidworks_command_state
 
 
 class QtStream(QObject):
@@ -98,6 +99,11 @@ class HardpointWorker(QThread):
                     self._process.kill()
                 except:
                     pass
+
+        if self._process is not None:
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
 
     def parse_output_line(self, line):
         """Parse special output lines for progress and state."""
@@ -194,6 +200,11 @@ class MarkerWorker(QThread):
                     self._process.kill()
                 except:
                     pass
+
+        if self._process is not None:
+            released, release_message = release_solidworks_command_state()
+            if not released:
+                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
 
     def parse_output_line(self, line):
         """Parse special output lines for progress and state."""
@@ -1216,6 +1227,22 @@ class CoordinateInsertionTab(QWidget):
             
             # Read output line by line
             for line in iter(process.stdout.readline, ''):
+                if worker and worker._abort:
+                    try:
+                        if process.poll() is None:
+                            process.terminate()
+                            process.wait(timeout=2)
+                    except:
+                        try:
+                            process.kill()
+                        except:
+                            pass
+
+                    released, release_message = release_solidworks_command_state()
+                    if not released and worker:
+                        worker.log.emit(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
+                    return False
+
                 line = line.strip()
                 if line:
                     # Parse special output lines for progress and state
@@ -1527,10 +1554,10 @@ class VisualizationControlTab(QWidget):
         
         # Title
         layout.addWidget(QLabel("Visualization Controls"))
-        layout.addWidget(QLabel("Control visibility of suspension components with color coding"))
+        layout.addWidget(QLabel("Control visibility of virtual suspension components and markers"))
         
-        # Toggle all controls
-        group_all = QGroupBox("Toggle All")
+        # Toggle all virtual components
+        group_all = QGroupBox("Virtual Components - Toggle All")
         h_all = QHBoxLayout()
         
         btn_show_all = QPushButton("Show All")
@@ -1545,7 +1572,7 @@ class VisualizationControlTab(QWidget):
         layout.addWidget(group_all)
         
         # Front/Rear controls
-        group_front_rear = QGroupBox("Front / Rear")
+        group_front_rear = QGroupBox("Virtual Components - Front / Rear")
         h_front_rear = QHBoxLayout()
         
         btn_show_front = QPushButton("Show Front")
@@ -1566,6 +1593,53 @@ class VisualizationControlTab(QWidget):
         
         group_front_rear.setLayout(h_front_rear)
         layout.addWidget(group_front_rear)
+
+        # Wheels and chassis controls
+        group_wheels_chassis = QGroupBox("Virtual Components - Wheels / Chassis")
+        grid_wheels_chassis = QGridLayout()
+
+        btn_show_wheels = QPushButton("Show Wheels")
+        btn_show_wheels.clicked.connect(lambda: self.set_suspension_visibility('wheels', True))
+        grid_wheels_chassis.addWidget(btn_show_wheels, 0, 0)
+
+        btn_hide_wheels = QPushButton("Hide Wheels")
+        btn_hide_wheels.clicked.connect(lambda: self.set_suspension_visibility('wheels', False))
+        grid_wheels_chassis.addWidget(btn_hide_wheels, 0, 1)
+
+        btn_show_front_wheels = QPushButton("Show Front Wheels")
+        btn_show_front_wheels.clicked.connect(lambda: self.set_suspension_visibility('front_wheels', True))
+        grid_wheels_chassis.addWidget(btn_show_front_wheels, 1, 0)
+
+        btn_hide_front_wheels = QPushButton("Hide Front Wheels")
+        btn_hide_front_wheels.clicked.connect(lambda: self.set_suspension_visibility('front_wheels', False))
+        grid_wheels_chassis.addWidget(btn_hide_front_wheels, 1, 1)
+
+        btn_show_rear_wheels = QPushButton("Show Rear Wheels")
+        btn_show_rear_wheels.clicked.connect(lambda: self.set_suspension_visibility('rear_wheels', True))
+        grid_wheels_chassis.addWidget(btn_show_rear_wheels, 2, 0)
+
+        btn_hide_rear_wheels = QPushButton("Hide Rear Wheels")
+        btn_hide_rear_wheels.clicked.connect(lambda: self.set_suspension_visibility('rear_wheels', False))
+        grid_wheels_chassis.addWidget(btn_hide_rear_wheels, 2, 1)
+
+        btn_show_chassis = QPushButton("Show Chassis")
+        btn_show_chassis.clicked.connect(lambda: self.set_suspension_visibility('chassis', True))
+        grid_wheels_chassis.addWidget(btn_show_chassis, 3, 0)
+
+        btn_hide_chassis = QPushButton("Hide Chassis")
+        btn_hide_chassis.clicked.connect(lambda: self.set_suspension_visibility('chassis', False))
+        grid_wheels_chassis.addWidget(btn_hide_chassis, 3, 1)
+
+        btn_show_non_chassis = QPushButton("Show Non-Chassis")
+        btn_show_non_chassis.clicked.connect(lambda: self.set_suspension_visibility('non_chassis', True))
+        grid_wheels_chassis.addWidget(btn_show_non_chassis, 4, 0)
+
+        btn_hide_non_chassis = QPushButton("Hide Non-Chassis")
+        btn_hide_non_chassis.clicked.connect(lambda: self.set_suspension_visibility('non_chassis', False))
+        grid_wheels_chassis.addWidget(btn_hide_non_chassis, 4, 1)
+
+        group_wheels_chassis.setLayout(grid_wheels_chassis)
+        layout.addWidget(group_wheels_chassis)
         
         # Color-coded category controls
         group_categories = QGroupBox("By Category (Color Coded)")
@@ -1573,6 +1647,10 @@ class VisualizationControlTab(QWidget):
         
         color_info = get_color_coding_info()
         for prefix, info in color_info.items():
+            # "Other" is a display category and not a real naming prefix to filter by.
+            if prefix == 'Other':
+                continue
+
             h_category = QHBoxLayout()
             
             btn_show = QPushButton(f"Show {info['name']}")
@@ -1589,6 +1667,25 @@ class VisualizationControlTab(QWidget):
         
         group_categories.setLayout(layout_categories)
         layout.addWidget(group_categories)
+
+        # Custom virtual component filter
+        group_custom = QGroupBox("Custom Virtual Component Filter")
+        h_custom = QHBoxLayout()
+
+        self.virtual_filter = QLineEdit()
+        self.virtual_filter.setPlaceholderText("Enter substring (e.g., CHAS_, UPRI_, RearLeft)")
+        h_custom.addWidget(self.virtual_filter)
+
+        btn_show_custom = QPushButton("Show")
+        btn_show_custom.clicked.connect(self.show_virtual_custom)
+        h_custom.addWidget(btn_show_custom)
+
+        btn_hide_custom = QPushButton("Hide")
+        btn_hide_custom.clicked.connect(self.hide_virtual_custom)
+        h_custom.addWidget(btn_hide_custom)
+
+        group_custom.setLayout(h_custom)
+        layout.addWidget(group_custom)
         
         # Marker controls
         group_markers = QGroupBox("Marker Controls")
@@ -1641,23 +1738,41 @@ class VisualizationControlTab(QWidget):
         layout.addStretch()
         self.setLayout(layout)
     
-    def set_suspension_visibility(self, target, visible):
+    def set_suspension_visibility(self, target, visible, filter_text=None):
         """Set suspension visibility."""
         try:
-            success = set_suspension_visibility(target, visible)
+            success = set_suspension_visibility(target, visible, filter_text)
             action = "Showing" if visible else "Hiding"
-            self.status_text.append(f"{action} {target}... {'✓ Done' if success else '✗ Failed'}")
+            target_text = f"{target} ({filter_text})" if filter_text else target
+            self.status_text.append(f"{action} {target_text}... {'✓ Done' if success else '✗ Failed'}")
         except Exception as e:
             self.status_text.append(f"✗ Error: {str(e)}")
     
-    def set_marker_visibility(self, target, visible):
+    def set_marker_visibility(self, target, visible, filter_text=None):
         """Set marker visibility."""
         try:
-            success = set_marker_visibility(target, visible)
+            success = set_marker_visibility(target, visible, filter_text)
             action = "Showing" if visible else "Hiding"
-            self.status_text.append(f"{action} {target}... {'✓ Done' if success else '✗ Failed'}")
+            target_text = f"{target} ({filter_text})" if filter_text else target
+            self.status_text.append(f"{action} {target_text}... {'✓ Done' if success else '✗ Failed'}")
         except Exception as e:
             self.status_text.append(f"✗ Error: {str(e)}")
+
+    def show_virtual_custom(self):
+        """Show virtual components matching custom text filter."""
+        text = self.virtual_filter.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Please enter filter text")
+            return
+        self.set_suspension_visibility('substring', True, text)
+
+    def hide_virtual_custom(self):
+        """Hide virtual components matching custom text filter."""
+        text = self.virtual_filter.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Please enter filter text")
+            return
+        self.set_suspension_visibility('substring', False, text)
 
 
 class HelpTab(QWidget):
