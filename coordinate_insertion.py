@@ -1,141 +1,27 @@
 import os
-import sys
 import json
 import subprocess
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
 from PyQt5.QtWidgets import QMessageBox
+from workers import WorkerBase
+from utils import find_suspension_tools_exe
 from solidworks_release import release_solidworks_command_state
 
-class CoordinateInsertionWorker(QThread):
+
+class CoordinateInsertionWorker(WorkerBase):
     """Worker thread for coordinate insertion operations."""
-    finished = pyqtSignal(bool, str)
-    progress = pyqtSignal(int, int)  # current, total
-    state_changed = pyqtSignal(str)  # state description
-    log = pyqtSignal(str)
-
-    def __init__(self, operation, *args):
-        super().__init__()
-        self.operation = operation
-        self.args = args
-        self._abort = False
-        self._process = None
-        self._total_tasks = 0
-        self._current_progress = 0
-
-    def abort(self):
-        """Request abort and terminate any running subprocess."""
-        self._abort = True
-        if self._process and self._process.poll() is None:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=2)
-            except:
-                try:
-                    self._process.kill()
-                except:
-                    pass
-
-        if self._process is not None:
-            released, release_message = release_solidworks_command_state()
-            if not released:
-                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
-
-    def parse_output_line(self, line):
-        """Parse special output lines for progress and state."""
-        if line.startswith("TOTAL:"):
-            try:
-                new_total = int(line.split(":")[1])
-                self._total_tasks = new_total
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None
-        elif line.startswith("PROGRESS:"):
-            try:
-                self._current_progress = int(line.split(":")[1])
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None
-        elif line.startswith("STATE:"):
-            state = line.split(":")[1]
-            state_descriptions = {
-                "Initializing": "Starting coordinate insertion...",
-                "LoadingJson": "Loading JSON data...",
-                "LoadingMarkerPart": "Loading marker part...",
-                "InsertingBodies": "Inserting marker bodies...",
-                "RenamingBodies": "Renaming bodies...",
-                "ApplyingColors": "Applying colors...",
-                "CreatingCoordinateSystems": "Creating coordinate systems...",
-                "CreatingHardpointsFolder": "Creating Hardpoints folder...",
-                "Rebuilding": "Rebuilding model...",
-                "Complete": "Coordinate insertion complete"
-            }
-            description = state_descriptions.get(state, state)
-            self.state_changed.emit(description)
-            return None
-        return line
-
-    def run(self):
-        stream = QtStream()
-        stream.text_written.connect(self._handle_log)
-        old_stdout = sys.stdout
-        sys.stdout = stream
-        try:
-            result = self.operation(*self.args, worker=self)
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(True, "Coordinate insertion completed successfully")
-        except Exception as e:
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(False, str(e))
-        finally:
-            sys.stdout = old_stdout
-
-    def _handle_log(self, text):
-        """Handle log output, parsing special lines."""
-        result = self.parse_output_line(text)
-        if result is not None:
-            self.log.emit(result)
-
-
-class QtStream(QObject):
-    """Redirect stdout to a PyQt signal."""
-    text_written = pyqtSignal(str)
-
-    def write(self, text):
-        if text.strip():
-            self.text_written.emit(text.strip())
-
-    def flush(self):
-        pass
-
-
-def get_suspension_tools_exe():
-    """Get the path to SuspensionTools.exe"""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Check multiple possible locations - PRIORITIZE RELEASE BUILD
-    paths_to_check = [
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "sw_drawer.exe"),
-    ]
-    
-    for path in paths_to_check:
-        if os.path.exists(path):
-            return path
-    
-    raise FileNotFoundError(
-        "sw_drawer.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"
-        f"Searched in: {paths_to_check[0]}"
-    )
+    SUCCESS_MESSAGE = "Coordinate insertion completed successfully"
+    STATE_DESCRIPTIONS = {
+        "Initializing": "Starting coordinate insertion...",
+        "LoadingJson": "Loading JSON data...",
+        "LoadingMarkerPart": "Loading marker part...",
+        "InsertingBodies": "Inserting marker bodies...",
+        "RenamingBodies": "Renaming bodies...",
+        "ApplyingColors": "Applying colors...",
+        "CreatingCoordinateSystems": "Creating coordinate systems...",
+        "CreatingHardpointsFolder": "Creating Hardpoints folder...",
+        "Rebuilding": "Rebuilding model...",
+        "Complete": "Coordinate insertion complete",
+    }
 
 
 def insert_coordinates(json_path, marker_path, worker=None, progress_callback=None):
@@ -146,7 +32,7 @@ def insert_coordinates(json_path, marker_path, worker=None, progress_callback=No
     if not os.path.exists(marker_path):
         raise FileNotFoundError(f"Marker part not found at {marker_path}")
     
-    exe_path = get_suspension_tools_exe()
+    exe_path = find_suspension_tools_exe()
     args = [exe_path, "hardpoints", "add", json_path, marker_path]
     
     print(f"Running: {' '.join(args)}")

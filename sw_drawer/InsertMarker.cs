@@ -22,24 +22,6 @@ namespace sw_drawer
 
     public class InsertMarker
     {
-        // Color mapping based on name prefixes (RGB values 0-255)
-        private static readonly Dictionary<string, int[]> ColorMap = new Dictionary<string, int[]>
-        {
-            { "CHAS_", new[] { 255, 0, 0 } },       // Red - Chassis
-            { "UPRI_", new[] { 0, 0, 255 } },       // Blue - Upright
-            { "ROCK_", new[] { 0, 128, 255 } },     // Light Blue - Rocker
-            { "NSMA_", new[] { 255, 192, 203 } },   // Pink - Non-Sprung Mass
-            { "PUSH_", new[] { 0, 255, 0 } },       // Green - Pushrod
-            { "TIER_", new[] { 255, 165, 0 } },     // Orange - Tie Rod
-            { "DAMP_", new[] { 128, 0, 128 } },     // Purple - Damper
-            { "ARBA_", new[] { 255, 255, 0 } },     // Yellow - ARB
-            { "_FRONT", new[] { 0, 200, 200 } },    // Cyan - Front (fallback)
-            { "_REAR", new[] { 200, 100, 0 } },     // Brown - Rear (fallback)
-            { "wheel", new[] { 64, 64, 64 } },      // Dark Gray - Wheels
-        };
-
-        private static readonly int[] TieRodColor = new[] { 255, 165, 0 }; // Orange (Tie Rod)
-        private static readonly int[] DefaultColor = new[] { 128, 128, 128 }; // Gray default
 
 
         public static bool Run(string[] args)
@@ -101,8 +83,6 @@ namespace sw_drawer
                 Path.Combine(exeDir, "..", "..", "..", "Marker.sldprt"),
                 Path.Combine(exeDir, "..", "..", "..", "..", "Marker.SLDPRT"),
                 Path.Combine(exeDir, "..", "..", "..", "..", "Marker.sldprt"),
-                @"C:\Users\harri\OptimumK Plugin for Solidworks\Marker.SLDPRT",
-                @"C:\Users\harri\OptimumK Plugin for Solidworks\Marker.sldprt",
             };
 
             foreach (string path in searchPaths)
@@ -132,17 +112,17 @@ namespace sw_drawer
                 upper.Contains("TIEPNT") ||
                 upper.Contains("TIE_PNT"))
             {
-                return TieRodColor;
+                return ColorMap.TieRodColor;
             }
 
-            foreach (var kvp in ColorMap)
+            foreach (var kvp in ColorMap.Colors)
             {
                 if (upper.Contains(kvp.Key.ToUpperInvariant()))
                 {
                     return kvp.Value;
                 }
             }
-            return DefaultColor;
+            return ColorMap.DefaultColor;
         }
 
         private static bool CreateAllMarkers(double radiusMm, string markerPath)

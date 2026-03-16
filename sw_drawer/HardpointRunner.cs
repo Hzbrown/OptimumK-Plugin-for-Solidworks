@@ -11,17 +11,6 @@ namespace sw_drawer
 {
     public class HardpointRunner
     {
-        // Color mapping based on actual JSON name prefixes (RGB values 0-255)
-        private static readonly Dictionary<string, int[]> ColorMap = new Dictionary<string, int[]>
-        {
-            { "TIER_", new[] { 255, 165, 0 } },      // Orange - Tie Rod (high priority token)
-            { "CHAS_", new[] { 255, 0, 0 } },       // Red - Chassis
-            { "wheel", new[] { 0, 255, 0 } },       // Green - Wheels
-            { "UPRI_", new[] { 0, 0, 255 } },       // Blue - Upright
-        };
-
-        private static readonly int[] TieRodColor = new[] { 255, 165, 0 }; // Orange
-        private static readonly int[] DefaultColor = new[] { 128, 0, 128 }; // Purple for other components
 
         private static void ReportState(HardpointState state)
         {
@@ -712,17 +701,17 @@ namespace sw_drawer
                 upper.Contains("TIEPNT") ||
                 upper.Contains("TIE_PNT"))
             {
-                return TieRodColor;
+                return ColorMap.TieRodColor;
             }
 
-            foreach (var kvp in ColorMap)
+            foreach (var kvp in ColorMap.Colors)
             {
                 if (upper.Contains(kvp.Key.ToUpperInvariant()))
                 {
                     return kvp.Value;
                 }
             }
-            return DefaultColor;
+            return ColorMap.DefaultColor;
         }
 
         private static void CreateCoordinateSystem(ModelDoc2 swModel, BodyInfo bodyInfo)

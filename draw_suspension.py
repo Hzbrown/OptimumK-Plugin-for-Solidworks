@@ -2,9 +2,7 @@ import json
 import os
 import subprocess
 from solidworks_release import release_solidworks_command_state
-
-SCRIPT_DIR = os.path.dirname(__file__)
-TOOLS_EXE = os.path.join(SCRIPT_DIR, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe")
+from utils import find_suspension_tools_exe
 
 
 def load_json(file_path):
@@ -15,9 +13,8 @@ def load_json(file_path):
 
 def insert_coordinate_system(name, x, y, z, angle_x=0.0, angle_y=0.0, angle_z=0.0):
     """Call C# SuspensionTools.exe via subprocess."""
-    if not os.path.exists(TOOLS_EXE):
-        raise FileNotFoundError(f"SuspensionTools.exe not found at {TOOLS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
-    args = [TOOLS_EXE, name, str(x), str(y), str(z), str(angle_x), str(angle_y), str(angle_z)]
+    exe = find_suspension_tools_exe()
+    args = [exe, name, str(x), str(y), str(z), str(angle_x), str(angle_y), str(angle_z)]
     result = subprocess.run(args, capture_output=True, text=True)
     if result.stdout:
         print(result.stdout.strip())
@@ -142,11 +139,9 @@ def draw_full_suspension(front_path: str, rear_path: str, vehicle_setup_path: st
 
 def _run_visibility_command(command: str, visible: bool, parameter: str = None) -> bool:
     """Run SuspensionTools.exe visibility command via subprocess."""
-    if not os.path.exists(TOOLS_EXE):
-        raise FileNotFoundError(f"SuspensionTools.exe not found at {TOOLS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
-    
+    exe = find_suspension_tools_exe()
     vis_str = "show" if visible else "hide"
-    args = [TOOLS_EXE, "vis", command, vis_str]
+    args = [exe, "vis", command, vis_str]
     if parameter:
         args.append(parameter)
     
@@ -212,10 +207,8 @@ def set_visibility_by_substring(substring: str, visible: bool) -> bool:
 
 def _run_marker_command(*args) -> bool:
     """Run SuspensionTools.exe marker command via subprocess."""
-    if not os.path.exists(TOOLS_EXE):
-        raise FileNotFoundError(f"SuspensionTools.exe not found at {TOOLS_EXE}. Run 'dotnet build -c Release' in sw_drawer folder.")
-    
-    cmd_args = [TOOLS_EXE, "marker"] + list(args)
+    exe = find_suspension_tools_exe()
+    cmd_args = [exe, "marker"] + list(args)
     result = subprocess.run(cmd_args, capture_output=True, text=True)
     if result.stdout:
         print(result.stdout.strip())

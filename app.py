@@ -3,13 +3,14 @@ import os
 import re
 import json
 import subprocess
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
                              QProgressBar, QGroupBox, QGridLayout, QCheckBox, QLineEdit, QSpinBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 
 sys.path.insert(0, os.path.dirname(__file__))
+from workers import QtStream, WorkerBase
+from utils import get_temp_dir
 from coordinate_insertion import CoordinateInsertionWorker, insert_coordinates, validate_files, get_marker_path, create_coordinates_folder
 from pose_creation import PoseCreationWorker, insert_pose, validate_pose_name, get_existing_poses
 from visualization_control import VisualizationWorker, set_suspension_visibility, set_marker_visibility, get_visualization_controls, get_color_coding_info
@@ -29,20 +30,8 @@ from draw_suspension import (
 from solidworks_release import release_solidworks_command_state
 
 
-class QtStream(QObject):
-    """Redirect stdout to a PyQt signal."""
-    text_written = pyqtSignal(str)
-
-    def write(self, text):
-        if text.strip():
-            self.text_written.emit(text.strip())
-
-    def flush(self):
-        pass
-
-
 class SolidWorksWorker(QThread):
-    """Worke.r thread for SolidWorks operations."""
+    """Worker thread for SolidWorks operations."""
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(int)
     log = pyqtSignal(str)
@@ -57,7 +46,6 @@ class SolidWorksWorker(QThread):
         self.progress.emit(count)
 
     def run(self):
-        # Redirect stdout to log signal for this thread
         stream = QtStream()
         stream.text_written.connect(self.log.emit)
         old_stdout = sys.stdout
@@ -71,201 +59,37 @@ class SolidWorksWorker(QThread):
             sys.stdout = old_stdout
 
 
-class HardpointWorker(QThread):
-    """Worker thread for hardpoint operations."""
-    finished = pyqtSignal(bool, str)
-    progress = pyqtSignal(int, int)  # current, total
-    state_changed = pyqtSignal(str)  # state description
-    log = pyqtSignal(str)
-
-    def __init__(self, operation, *args):
-        super().__init__()
-        self.operation = operation
-        self.args = args
-        self._abort = False
-        self._process = None
-        self._total_tasks = 0
-        self._current_progress = 0
-
-    def abort(self):
-        """Request abort and terminate any running subprocess."""
-        self._abort = True
-        if self._process and self._process.poll() is None:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=2)
-            except:
-                try:
-                    self._process.kill()
-                except:
-                    pass
-
-        if self._process is not None:
-            released, release_message = release_solidworks_command_state()
-            if not released:
-                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
-
-    def parse_output_line(self, line):
-        """Parse special output lines for progress and state."""
-        if line.startswith("TOTAL:"):
-            try:
-                new_total = int(line.split(":")[1])
-                # Always update to the latest total (may be refined during execution)
-                self._total_tasks = new_total
-                # Emit progress with updated total, keeping current progress
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None  # Don't show in log
-        elif line.startswith("PROGRESS:"):
-            try:
-                self._current_progress = int(line.split(":")[1])
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None  # Don't show in log
-        elif line.startswith("STATE:"):
-            state = line.split(":")[1]
-            state_descriptions = {
-                "Initializing": "Starting...",
-                "LoadingJson": "Loading JSON data...",
-                "LoadingMarkerPart": "Loading marker part...",
-                "InsertingBodies": "Inserting marker bodies...",
-                "RenamingBodies": "Renaming bodies...",
-                "ApplyingColors": "Applying colors...",
-                "CreatingCoordinateSystems": "Creating coordinate systems...",
-                "CreatingHardpointsFolder": "Creating Hardpoints folder...",
-                "CreatingTransformsFolder": "Creating Transforms folder...",
-                "CreatingTransforms": "Creating transform features...",
-                "UpdatingSuppression": "Updating suppression...",
-                "Rebuilding": "Rebuilding model...",
-                "Complete": "Done"
-            }
-            description = state_descriptions.get(state, state)
-            self.state_changed.emit(description)
-            return None  # Don't show in log
-        return line  # Normal log line
-
-    def run(self):
-        stream = QtStream()
-        stream.text_written.connect(self._handle_log)
-        old_stdout = sys.stdout
-        sys.stdout = stream
-        try:
-            result = self.operation(*self.args, worker=self)
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(True, "Operation completed successfully")
-        except Exception as e:
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(False, str(e))
-        finally:
-            sys.stdout = old_stdout
-
-    def _handle_log(self, text):
-        """Handle log output, parsing special lines."""
-        result = self.parse_output_line(text)
-        if result is not None:
-            self.log.emit(result)
+class HardpointWorker(WorkerBase):
+    """Worker thread for hardpoint insertion operations."""
+    STATE_DESCRIPTIONS = {
+        "Initializing": "Starting...",
+        "LoadingJson": "Loading JSON data...",
+        "LoadingMarkerPart": "Loading marker part...",
+        "InsertingBodies": "Inserting marker bodies...",
+        "RenamingBodies": "Renaming bodies...",
+        "ApplyingColors": "Applying colors...",
+        "CreatingCoordinateSystems": "Creating coordinate systems...",
+        "CreatingHardpointsFolder": "Creating Hardpoints folder...",
+        "CreatingTransformsFolder": "Creating Transforms folder...",
+        "CreatingTransforms": "Creating transform features...",
+        "UpdatingSuppression": "Updating suppression...",
+        "Rebuilding": "Rebuilding model...",
+        "Complete": "Done",
+    }
 
 
-class MarkerWorker(QThread):
+class MarkerWorker(WorkerBase):
     """Worker thread for marker operations."""
-    finished = pyqtSignal(bool, str)
-    progress = pyqtSignal(int, int)  # current, total
-    state_changed = pyqtSignal(str)  # state description
-    log = pyqtSignal(str)
-
-    def __init__(self, operation, *args):
-        super().__init__()
-        self.operation = operation
-        self.args = args
-        self._abort = False
-        self._process = None
-        self._total_tasks = 0
-        self._current_progress = 0
-
-    def abort(self):
-        """Request abort and terminate any running subprocess."""
-        self._abort = True
-        if self._process and self._process.poll() is None:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=2)
-            except:
-                try:
-                    self._process.kill()
-                except:
-                    pass
-
-        if self._process is not None:
-            released, release_message = release_solidworks_command_state()
-            if not released:
-                print(f"Warning: Failed to release SolidWorks state after abort: {release_message}")
-
-    def parse_output_line(self, line):
-        """Parse special output lines for progress and state."""
-        if line.startswith("TOTAL:"):
-            try:
-                new_total = int(line.split(":")[1])
-                # Always update to the latest total (may be refined during execution)
-                self._total_tasks = new_total
-                # Emit progress with updated total, keeping current progress
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None  # Don't show in log
-        elif line.startswith("PROGRESS:"):
-            try:
-                self._current_progress = int(line.split(":")[1])
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None  # Don't show in log
-        elif line.startswith("STATE:"):
-            state = line.split(":")[1]
-            state_descriptions = {
-                "Initializing": "Starting...",
-                "LoadingMarker": "Reading marker file...",
-                "ScanningCoordSystems": "Scanning coordinate systems...",
-                "InsertingComponents": "Inserting markers...",
-                "MatingMarkers": "Mating markers...",
-                "PostProcessing": "Post-processing markers...",
-                "Cleanup": "Cleaning up...",
-                "Complete": "Done"
-            }
-            description = state_descriptions.get(state, state)
-            self.state_changed.emit(description)
-            return None  # Don't show in log
-        return line  # Normal log line
-
-    def run(self):
-        stream = QtStream()
-        stream.text_written.connect(self._handle_log)
-        old_stdout = sys.stdout
-        sys.stdout = stream
-        try:
-            result = self.operation(*self.args, worker=self)
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(True, "Operation completed successfully")
-        except Exception as e:
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(False, str(e))
-        finally:
-            sys.stdout = old_stdout
-
-    def _handle_log(self, text):
-        """Handle log output, parsing special lines."""
-        result = self.parse_output_line(text)
-        if result is not None:
-            self.log.emit(result)
+    STATE_DESCRIPTIONS = {
+        "Initializing": "Starting...",
+        "LoadingMarker": "Reading marker file...",
+        "ScanningCoordSystems": "Scanning coordinate systems...",
+        "InsertingComponents": "Inserting markers...",
+        "MatingMarkers": "Mating markers...",
+        "PostProcessing": "Post-processing markers...",
+        "Cleanup": "Cleaning up...",
+        "Complete": "Done",
+    }
 
 
 class ImportOptimumKTab(QWidget):
@@ -307,15 +131,15 @@ class ImportOptimumKTab(QWidget):
         h_json = QHBoxLayout()
         
         btn_preview_front = QPushButton("Preview Front JSON")
-        btn_preview_front.clicked.connect(lambda: self.preview_json_file("temp/Front_Suspension.json"))
+        btn_preview_front.clicked.connect(lambda: self.preview_json_file(os.path.join(get_temp_dir(), "Front_Suspension.json")))
         h_json.addWidget(btn_preview_front)
         
         btn_preview_rear = QPushButton("Preview Rear JSON")
-        btn_preview_rear.clicked.connect(lambda: self.preview_json_file("temp/Rear_Suspension.json"))
+        btn_preview_rear.clicked.connect(lambda: self.preview_json_file(os.path.join(get_temp_dir(), "Rear_Suspension.json")))
         h_json.addWidget(btn_preview_rear)
         
         btn_preview_vehicle = QPushButton("Preview Vehicle Setup")
-        btn_preview_vehicle.clicked.connect(lambda: self.preview_json_file("temp/Vehicle_Setup.json"))
+        btn_preview_vehicle.clicked.connect(lambda: self.preview_json_file(os.path.join(get_temp_dir(), "Vehicle_Setup.json")))
         h_json.addWidget(btn_preview_vehicle)
         
         layout.addLayout(h_json)
@@ -341,8 +165,8 @@ class ImportOptimumKTab(QWidget):
         try:
             self.status_label.setText("Parsing Excel file...")
             parser = OptimumSheetParser(self.excel_file)
-            parser.save_json_per_sheet("temp")
-            parser.save_reference_distance("temp")
+            parser.save_json_per_sheet(get_temp_dir())
+            parser.save_reference_distance(get_temp_dir())
             self.status_label.setText("✓ Excel file parsed successfully")
             QMessageBox.information(self, "Success", "Excel file parsed. JSON files saved to /temp")
         except Exception as e:
@@ -471,9 +295,9 @@ class WriteSolidworksTab(QWidget):
         self.worker.start()
 
     def import_full_suspension(self):
-        front_file = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        rear_file = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
-        vehicle_file = os.path.join(os.path.dirname(__file__), "temp", "Vehicle_Setup.json")
+        front_file = os.path.join(get_temp_dir(), "Front_Suspension.json")
+        rear_file = os.path.join(get_temp_dir(), "Rear_Suspension.json")
+        vehicle_file = os.path.join(get_temp_dir(), "Vehicle_Setup.json")
 
         if not all(os.path.exists(f) for f in [front_file, rear_file, vehicle_file]):
             QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first")
@@ -487,7 +311,7 @@ class WriteSolidworksTab(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
     def import_front_suspension(self):
-        front_file = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
+        front_file = os.path.join(get_temp_dir(), "Front_Suspension.json")
         if not os.path.exists(front_file):
             QMessageBox.warning(self, "Missing File", "Please parse an Excel file first")
             return
@@ -499,8 +323,8 @@ class WriteSolidworksTab(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
     def import_rear_suspension(self):
-        rear_file = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
-        vehicle_file = os.path.join(os.path.dirname(__file__), "temp", "Vehicle_Setup.json")
+        rear_file = os.path.join(get_temp_dir(), "Rear_Suspension.json")
+        vehicle_file = os.path.join(get_temp_dir(), "Vehicle_Setup.json")
         if not all(os.path.exists(f) for f in [rear_file, vehicle_file]):
             QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first")
             return
@@ -1198,7 +1022,7 @@ class CoordinateInsertionTab(QWidget):
     
     def insert_hardpoints(self):
         """Insert all hardpoints including wheels using automatic paths."""
-        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
+        json_path = os.path.join(get_temp_dir(), "Front_Suspension.json")
         marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
         
         if not os.path.exists(json_path):
@@ -1324,7 +1148,7 @@ class CoordinateInsertionTab(QWidget):
 
     def insert_wheel_coordinates(self):
         """Insert wheel coordinates using automatic paths."""
-        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
+        json_path = os.path.join(get_temp_dir(), "Front_Suspension.json")
         marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
         
         if not os.path.exists(json_path):
@@ -1515,8 +1339,8 @@ class PoseCreationTab(QWidget):
     
     def create_pose(self):
         """Insert pose using latest parsed temp JSON files."""
-        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        rear_json_path = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
+        json_path = os.path.join(get_temp_dir(), "Front_Suspension.json")
+        rear_json_path = os.path.join(get_temp_dir(), "Rear_Suspension.json")
         pose_name = self.pose_name.text().strip()
 
         if not pose_name:
@@ -1775,17 +1599,22 @@ class HelpTab(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-    
+
     def init_ui(self):
+        import webbrowser
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        web = QWebEngineView()
-        help_path = os.path.join(os.path.dirname(__file__), "help.htm")
-        web.load(QUrl.fromLocalFile(help_path))
-        layout.addWidget(web)
-        
+
+        btn = QPushButton("Open Help in Browser")
+        btn.clicked.connect(self._open_help)
+        layout.addWidget(btn)
+        layout.addStretch()
+
         self.setLayout(layout)
+
+    def _open_help(self):
+        import webbrowser
+        help_path = os.path.join(os.path.dirname(__file__), "help.htm")
+        webbrowser.open(help_path)
 
 
 class OptimumKApp(QMainWindow):

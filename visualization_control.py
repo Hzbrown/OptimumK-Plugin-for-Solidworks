@@ -1,146 +1,25 @@
 import os
-import sys
 import subprocess
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
+from workers import WorkerBase
+from utils import find_suspension_tools_exe
 
-class VisualizationWorker(QThread):
+
+class VisualizationWorker(WorkerBase):
     """Worker thread for visualization operations."""
-    finished = pyqtSignal(bool, str)
-    progress = pyqtSignal(int, int)  # current, total
-    state_changed = pyqtSignal(str)  # state description
-    log = pyqtSignal(str)
-
-    def __init__(self, operation, *args):
-        super().__init__()
-        self.operation = operation
-        self.args = args
-        self._abort = False
-        self._process = None
-        self._total_tasks = 0
-        self._current_progress = 0
-
-    def abort(self):
-        """Request abort and terminate any running subprocess."""
-        self._abort = True
-        if self._process and self._process.poll() is None:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=2)
-            except:
-                try:
-                    self._process.kill()
-                except:
-                    pass
-
-    def parse_output_line(self, line):
-        """Parse special output lines for progress and state."""
-        if line.startswith("TOTAL:"):
-            try:
-                new_total = int(line.split(":")[1])
-                self._total_tasks = new_total
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None
-        elif line.startswith("PROGRESS:"):
-            try:
-                self._current_progress = int(line.split(":")[1])
-                self.progress.emit(self._current_progress, self._total_tasks)
-            except:
-                pass
-            return None
-        elif line.startswith("STATE:"):
-            state = line.split(":")[1]
-            state_descriptions = {
-                "Initializing": "Starting visualization control...",
-                "LoadingJson": "Loading JSON data...",
-                "LoadingMarkerPart": "Loading marker part...",
-                "UpdatingVisibility": "Updating visibility...",
-                "Rebuilding": "Rebuilding model...",
-                "Complete": "Visualization control complete"
-            }
-            description = state_descriptions.get(state, state)
-            self.state_changed.emit(description)
-            return None
-        return line
-
-    def run(self):
-        stream = QtStream()
-        stream.text_written.connect(self._handle_log)
-        old_stdout = sys.stdout
-        sys.stdout = stream
-        try:
-            result = self.operation(*self.args, worker=self)
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(True, "Visualization control completed successfully")
-        except Exception as e:
-            if self._abort:
-                self.finished.emit(False, "Operation aborted")
-            else:
-                self.finished.emit(False, str(e))
-        finally:
-            sys.stdout = old_stdout
-
-    def _handle_log(self, text):
-        """Handle log output, parsing special lines."""
-        result = self.parse_output_line(text)
-        if result is not None:
-            self.log.emit(result)
-
-
-class QtStream(QObject):
-    """Redirect stdout to a PyQt signal."""
-    text_written = pyqtSignal(str)
-
-    def write(self, text):
-        if text.strip():
-            self.text_written.emit(text.strip())
-
-    def flush(self):
-        pass
-
-
-def get_suspension_tools_exe():
-    """Get the path to SuspensionTools.exe"""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Check multiple possible locations
-    paths_to_check = [
-        # Preferred modern output name
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
-
-        # Legacy/alternate output names
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net6.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net6.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net8.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net8.0", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "sw_drawer.exe"),
-    ]
-
-    existing = [path for path in paths_to_check if os.path.exists(path)]
-    if existing:
-        # Prefer SuspensionTools.exe when available to avoid stale legacy executables.
-        preferred = [p for p in existing if os.path.basename(p).lower() == "suspensiontools.exe"]
-        candidates = preferred if preferred else existing
-        return max(candidates, key=os.path.getmtime)
-    
-    raise FileNotFoundError(
-        "sw_drawer.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"
-        f"Searched in: {paths_to_check[0]}"
-    )
+    SUCCESS_MESSAGE = "Visualization control completed successfully"
+    STATE_DESCRIPTIONS = {
+        "Initializing": "Starting visualization control...",
+        "LoadingJson": "Loading JSON data...",
+        "LoadingMarkerPart": "Loading marker part...",
+        "UpdatingVisibility": "Updating visibility...",
+        "Rebuilding": "Rebuilding model...",
+        "Complete": "Visualization control complete",
+    }
 
 
 def set_suspension_visibility(target, visible, filter_text=None):
     """Set suspension visibility using SuspensionTools.exe."""
-    exe_path = get_suspension_tools_exe()
+    exe_path = find_suspension_tools_exe()
     
     # Map target to command
     command_map = {
@@ -175,7 +54,7 @@ def set_suspension_visibility(target, visible, filter_text=None):
 
 def set_marker_visibility(target, visible, filter_text=None):
     """Set marker visibility using SuspensionTools.exe."""
-    exe_path = get_suspension_tools_exe()
+    exe_path = find_suspension_tools_exe()
     
     # Map target to command
     command_map = {
@@ -205,7 +84,7 @@ def set_marker_visibility(target, visible, filter_text=None):
 
 def set_feature_visibility(feature_name, visible):
     """Set specific feature visibility."""
-    exe_path = get_suspension_tools_exe()
+    exe_path = find_suspension_tools_exe()
     vis_str = 'show' if visible else 'hide'
     
     args = [exe_path, 'vis', 'feature', vis_str, feature_name]

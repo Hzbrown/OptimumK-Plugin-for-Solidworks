@@ -1,20 +1,5 @@
-import os
 import subprocess
-
-
-def _suspension_tools_candidates():
-    """Get candidate paths to SuspensionTools executable (preferred first)."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    return [
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "sw_drawer.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "sw_drawer.exe"),
-    ]
+from utils import find_suspension_tools_exe
 
 
 def release_solidworks_command_state():
@@ -24,13 +9,9 @@ def release_solidworks_command_state():
     Returns:
         (success: bool, message: str)
     """
-    exe_path = None
-    for candidate in _suspension_tools_candidates():
-        if os.path.exists(candidate):
-            exe_path = candidate
-            break
-
-    if not exe_path:
+    try:
+        exe_path = find_suspension_tools_exe()
+    except FileNotFoundError:
         return False, "SuspensionTools executable not found for release"
 
     try:

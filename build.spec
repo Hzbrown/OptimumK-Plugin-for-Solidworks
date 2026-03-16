@@ -8,11 +8,9 @@ a = Analysis(
     binaries=[],
     datas=[
         ('help.htm', '.'),
+        ('help_files', 'help_files'),
     ],
     hiddenimports=[
-        'PyQt5.QtWebEngineWidgets',
-        'PyQt5.QtWebEngineCore',
-        'PyQt5.QtWebChannel',
         'win32com.client',
     ],
     hookspath=[],
