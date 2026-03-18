@@ -2,17 +2,23 @@ import os
 import sys
 
 
-def get_temp_dir():
-    """Return the writable temp directory for parsed JSON data.
+def get_data_dir():
+    """Return the writable base directory for user data (profiles, poses, etc.).
 
-    Uses %LOCALAPPDATA%/OptimumK/temp for packaged builds (avoids
-    writing into Program Files), and a local ./temp for dev runs.
+    Packaged builds: %LOCALAPPDATA%/OptimumK  (avoids writing into Program Files)
+    Dev builds:      the project root (same as script location)
     """
     if getattr(sys, 'frozen', False):
         base = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'OptimumK')
     else:
         base = os.path.dirname(os.path.abspath(__file__))
-    temp = os.path.join(base, 'temp')
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def get_temp_dir():
+    """Return the writable temp directory for parsed JSON data."""
+    temp = os.path.join(get_data_dir(), 'temp')
     os.makedirs(temp, exist_ok=True)
     return temp
 

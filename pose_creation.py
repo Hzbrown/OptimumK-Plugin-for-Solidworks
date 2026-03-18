@@ -2,7 +2,7 @@ import os
 import json
 import subprocess
 from workers import WorkerBase
-from utils import find_suspension_tools_exe
+from utils import find_suspension_tools_exe, get_data_dir
 from solidworks_release import release_solidworks_command_state
 
 
@@ -182,7 +182,7 @@ def validate_pose_files(json_path):
 
 def create_pose_folder(pose_name):
     """Create pose folder if it doesn't exist."""
-    pose_dir = os.path.join(os.path.dirname(__file__), "poses", pose_name)
+    pose_dir = os.path.join(get_data_dir(), "poses", pose_name)
     os.makedirs(pose_dir, exist_ok=True)
     return pose_dir
 
@@ -213,7 +213,7 @@ def validate_pose_name(pose_name):
 
 def get_existing_poses():
     """Get list of existing poses from the poses directory."""
-    poses_dir = os.path.join(os.path.dirname(__file__), "poses")
+    poses_dir = os.path.join(get_data_dir(), "poses")
     if not os.path.exists(poses_dir):
         return []
     
@@ -226,7 +226,7 @@ def get_existing_poses():
 def delete_pose_folder(pose_name):
     """Delete a pose folder and its contents."""
     import shutil
-    pose_dir = os.path.join(os.path.dirname(__file__), "poses", pose_name)
+    pose_dir = os.path.join(get_data_dir(), "poses", pose_name)
     if os.path.exists(pose_dir):
         try:
             shutil.rmtree(pose_dir)

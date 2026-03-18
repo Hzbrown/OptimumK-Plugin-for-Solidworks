@@ -1396,8 +1396,9 @@ namespace sw_drawer
                     return;
                 }
 
+                string assemblyTitle = Path.GetFileNameWithoutExtension(swModel.GetPathName());
                 bool compCsSelected = swModel.Extension.SelectByID2(
-                    componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
+                    componentCoordName + "@" + comp.Name2 + "@" + assemblyTitle,
                     "COORDSYS",
                     0, 0, 0,
                     true,
@@ -1538,7 +1539,7 @@ namespace sw_drawer
                 return false;
             }
 
-            string assemblyTitle = swModel.GetTitle();
+            string assemblyTitle = Path.GetFileNameWithoutExtension(swModel.GetPathName());
             string componentName = comp.Name2 ?? string.Empty;
 
             bool selected = swModel.Extension.SelectByID2(
@@ -2169,7 +2170,7 @@ namespace sw_drawer
                 // Fallback selection by name if direct component selection fails
                 if (!selected)
                 {
-                    string assyTitle = swModel.GetTitle();
+                    string assyTitle = Path.GetFileNameWithoutExtension(swModel.GetPathName());
                     string compName = partInfo.Component.Name2;
                     selected = swModel.Extension.SelectByID2(
                         $"{compName}@{assyTitle}",

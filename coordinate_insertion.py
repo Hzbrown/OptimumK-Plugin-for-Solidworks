@@ -1,9 +1,10 @@
 import os
+import sys
 import json
 import subprocess
 from PyQt5.QtWidgets import QMessageBox
 from workers import WorkerBase
-from utils import find_suspension_tools_exe
+from utils import find_suspension_tools_exe, get_data_dir
 from solidworks_release import release_solidworks_command_state
 
 
@@ -215,24 +216,42 @@ def validate_files(json_path, marker_path):
 
 def create_coordinates_folder():
     """Create coordinates folder if it doesn't exist."""
-    coords_dir = os.path.join(os.path.dirname(__file__), "coordinates")
+    coords_dir = os.path.join(get_data_dir(), "coordinates")
     os.makedirs(coords_dir, exist_ok=True)
     return coords_dir
 
 
 def get_marker_path():
-    """Get the default marker path."""
+    """Get the default marker path.
+
+    For packaged builds (PyInstaller), checks exe directory first.
+    For dev builds, checks script directory and subdirectories.
+    """
+    marker_paths = []
+
+    # Packaged build: check exe directory first (e.g., C:\Program Files\OptimumK\)
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        marker_paths.extend([
+            os.path.join(exe_dir, "Marker.SLDPRT"),
+            os.path.join(exe_dir, "Marker.sldprt"),
+        ])
+
+    # Development build: check script directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    marker_paths = [
+    marker_paths.extend([
         os.path.join(script_dir, "Marker.SLDPRT"),
         os.path.join(script_dir, "Marker.sldprt"),
         os.path.join(script_dir, "coordinates", "Marker.SLDPRT"),
         os.path.join(script_dir, "coordinates", "Marker.sldprt"),
-    ]
-    
+    ])
+
     for path in marker_paths:
         if os.path.exists(path):
             return path
-    
-    # If no marker found, return default path
-    return os.path.join(script_dir, "Marker.SLDPRT")
+
+    # If no marker found, return packaged location (will error if missing)
+    if getattr(sys, 'frozen', False):
+        return os.path.join(os.path.dirname(sys.executable), "Marker.SLDPRT")
+    else:
+        return os.path.join(script_dir, "Marker.SLDPRT")

@@ -73,16 +73,20 @@ namespace sw_drawer
 
         private static string FindMarkerPath()
         {
-            // Look for Marker.sldprt in common locations (check both cases)
+            // Look for Marker.sldprt in common locations (check both cases).
+            // Prioritize: packaged install > dev build in project root > relative paths
             string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             string[] searchPaths = new[]
             {
+                // Packaged install (shipped alongside exe in C:\Program Files\OptimumK\)
                 Path.Combine(exeDir, "Marker.SLDPRT"),
                 Path.Combine(exeDir, "Marker.sldprt"),
-                Path.Combine(exeDir, "..", "..", "..", "Marker.SLDPRT"),
-                Path.Combine(exeDir, "..", "..", "..", "Marker.sldprt"),
+
+                // Development build (relative to sw_drawer/bin/Release|Debug/net48/)
                 Path.Combine(exeDir, "..", "..", "..", "..", "Marker.SLDPRT"),
                 Path.Combine(exeDir, "..", "..", "..", "..", "Marker.sldprt"),
+                Path.Combine(exeDir, "..", "..", "..", "Marker.SLDPRT"),
+                Path.Combine(exeDir, "..", "..", "..", "Marker.sldprt"),
             };
 
             foreach (string path in searchPaths)
@@ -95,8 +99,15 @@ namespace sw_drawer
                 }
             }
 
+            // Not found — print debug info
+            Console.WriteLine($"Searched from exe dir: {exeDir}");
+            foreach (var path in searchPaths)
+            {
+                Console.WriteLine($"  Checked: {Path.GetFullPath(path)}");
+            }
+
             throw new FileNotFoundException(
-                "Marker.SLDPRT not found. Please place it in the project folder or specify path.");
+                "Marker.SLDPRT not found. Please verify it is in the same folder as SuspensionTools.exe.");
         }
 
         private static int[] GetColorForName(string name)

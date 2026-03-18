@@ -174,7 +174,7 @@ class ImportOptimumKTab(QWidget):
             QMessageBox.critical(self, "Error", f"Parse failed: {str(e)}")
     
     def preview_json_file(self, file_path):
-        full_path = os.path.join(os.path.dirname(__file__), file_path)
+        full_path = os.path.join(get_temp_dir(), os.path.basename(file_path)) if not os.path.isabs(file_path) else file_path
         try:
             with open(full_path, 'r') as f:
                 data = json.load(f)
@@ -1023,16 +1023,16 @@ class CoordinateInsertionTab(QWidget):
     def insert_hardpoints(self):
         """Insert all hardpoints including wheels using automatic paths."""
         json_path = os.path.join(get_temp_dir(), "Front_Suspension.json")
-        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
-        
+        marker_path = get_marker_path()
+
         if not os.path.exists(json_path):
             QMessageBox.warning(self, "Missing File", "Front_Suspension.json not found in /temp. Parse an Excel file first.")
             return
-            
+
         if not os.path.exists(marker_path):
-            QMessageBox.critical(self, "Missing Marker", "Marker.SLDPRT not found in plugin root folder")
+            QMessageBox.critical(self, "Missing Marker", f"Marker.SLDPRT not found.\nSearched: {marker_path}")
             return
-        
+
         self.start_loading("Inserting all hardpoints (including wheels) from latest Front_Suspension.json...")
         
         # Use the hardpoint runner for comprehensive hardpoint insertion
@@ -1054,20 +1054,9 @@ class CoordinateInsertionTab(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to run hardpoint runner: {str(e)}")
 
     def _get_latest_suspension_tools_exe(self):
-        """Return the newest available SuspensionTools executable (Release/Debug)."""
-        sw_drawer_path = os.path.join(os.path.dirname(__file__), "sw_drawer")
-        candidates = [
-            os.path.join(sw_drawer_path, "bin", "Release", "net48", "SuspensionTools.exe"),
-            os.path.join(sw_drawer_path, "bin", "Debug", "net48", "SuspensionTools.exe"),
-            os.path.join(sw_drawer_path, "bin", "Release", "net48", "sw_drawer.exe"),
-            os.path.join(sw_drawer_path, "bin", "Debug", "net48", "sw_drawer.exe"),
-        ]
-
-        existing = [p for p in candidates if os.path.exists(p)]
-        if not existing:
-            raise FileNotFoundError("SuspensionTools.exe not found. Build the project first.")
-
-        latest = max(existing, key=lambda p: os.path.getmtime(p))
+        """Return the newest available SuspensionTools executable."""
+        from utils import find_suspension_tools_exe
+        latest = find_suspension_tools_exe()
         self.status_text.append(f"Using executable: {latest}")
         return latest
     
@@ -1149,16 +1138,16 @@ class CoordinateInsertionTab(QWidget):
     def insert_wheel_coordinates(self):
         """Insert wheel coordinates using automatic paths."""
         json_path = os.path.join(get_temp_dir(), "Front_Suspension.json")
-        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
-        
+        marker_path = get_marker_path()
+
         if not os.path.exists(json_path):
             QMessageBox.warning(self, "Missing File", "Front_Suspension.json not found in /temp. Parse an Excel file first.")
             return
-            
+
         if not os.path.exists(marker_path):
-            QMessageBox.critical(self, "Missing Marker", "Marker.SLDPRT not found in plugin root folder")
+            QMessageBox.critical(self, "Missing Marker", f"Marker.SLDPRT not found.\nSearched: {marker_path}")
             return
-        
+
         self.start_loading("Inserting wheel coordinates from latest Front_Suspension.json...")
         
         # Use the hardpoint runner for wheel insertion

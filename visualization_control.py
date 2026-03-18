@@ -1,7 +1,7 @@
 import os
 import subprocess
 from workers import WorkerBase
-from utils import find_suspension_tools_exe
+from utils import find_suspension_tools_exe, get_data_dir
 
 
 class VisualizationWorker(WorkerBase):
@@ -184,7 +184,7 @@ def get_active_document_info():
 
 def create_visualization_profile(profile_name, settings):
     """Create a visualization profile for quick access."""
-    profiles_dir = os.path.join(os.path.dirname(__file__), "visualization_profiles")
+    profiles_dir = os.path.join(get_data_dir(), "visualization_profiles")
     os.makedirs(profiles_dir, exist_ok=True)
     
     profile_path = os.path.join(profiles_dir, f"{profile_name}.json")
@@ -204,7 +204,7 @@ def create_visualization_profile(profile_name, settings):
 
 def load_visualization_profile(profile_name):
     """Load a visualization profile."""
-    profiles_dir = os.path.join(os.path.dirname(__file__), "visualization_profiles")
+    profiles_dir = os.path.join(get_data_dir(), "visualization_profiles")
     profile_path = os.path.join(profiles_dir, f"{profile_name}.json")
     
     if os.path.exists(profile_path):
@@ -216,7 +216,7 @@ def load_visualization_profile(profile_name):
 
 def get_available_profiles():
     """Get list of available visualization profiles."""
-    profiles_dir = os.path.join(os.path.dirname(__file__), "visualization_profiles")
+    profiles_dir = os.path.join(get_data_dir(), "visualization_profiles")
     if not os.path.exists(profiles_dir):
         return []
     
