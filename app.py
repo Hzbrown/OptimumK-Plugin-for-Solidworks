@@ -2,8 +2,9 @@ import sys
 import os
 import re
 import json
+import shutil
 import subprocess
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
                              QProgressBar, QGroupBox, QGridLayout, QCheckBox, QLineEdit, QSpinBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
@@ -268,14 +269,179 @@ class MarkerWorker(QThread):
             self.log.emit(result)
 
 
+class ProjectTab(QWidget):
+    """Tab for creating or loading a SolidWorks project folder."""
+
+    TEMPLATE_SUBDIR = "Solidworks Project Template"
+    COMPONENT_JSON_FILES = [
+        "Chassis.json", "FL_Corner.json", "FR_Corner.json",
+        "RL_Corner.json", "RR_Corner.json", "Vehicle_Setup.json",
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+
+    def _get_app(self):
+        """Walk up the widget tree to find OptimumKApp."""
+        widget = self.parent()
+        while widget is not None:
+            if isinstance(widget, OptimumKApp):
+                return widget
+            widget = widget.parent()
+        return None
+
+    def _default_template_path(self):
+        return os.path.join(os.path.dirname(__file__), self.TEMPLATE_SUBDIR)
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Project Management"))
+        layout.addWidget(QLabel("Create a new project from the template or load an existing one"))
+
+        # --- New Project ---
+        group_new = QGroupBox("New Project")
+        v_new = QVBoxLayout()
+
+        h_template = QHBoxLayout()
+        h_template.addWidget(QLabel("Template Folder:"))
+        self.template_path_label = QLabel(self._default_template_path())
+        self.template_path_label.setWordWrap(True)
+        h_template.addWidget(self.template_path_label, 1)
+        btn_browse_template = QPushButton("Browse")
+        btn_browse_template.clicked.connect(self.browse_template_folder)
+        h_template.addWidget(btn_browse_template)
+        v_new.addLayout(h_template)
+
+        h_dest = QHBoxLayout()
+        h_dest.addWidget(QLabel("Destination:"))
+        self.new_project_path_label = QLabel("Not selected")
+        self.new_project_path_label.setWordWrap(True)
+        h_dest.addWidget(self.new_project_path_label, 1)
+        btn_browse_dest = QPushButton("Browse")
+        btn_browse_dest.clicked.connect(self.browse_new_project_folder)
+        h_dest.addWidget(btn_browse_dest)
+        v_new.addLayout(h_dest)
+
+        btn_create = QPushButton("Create New Project")
+        btn_create.setMinimumHeight(36)
+        btn_create.clicked.connect(self.create_new_project)
+        v_new.addWidget(btn_create)
+
+        group_new.setLayout(v_new)
+        layout.addWidget(group_new)
+
+        # --- Load Existing Project ---
+        group_load = QGroupBox("Load Existing Project")
+        v_load = QVBoxLayout()
+
+        h_load = QHBoxLayout()
+        h_load.addWidget(QLabel("Project Folder:"))
+        self.load_project_path_label = QLabel("Not selected")
+        self.load_project_path_label.setWordWrap(True)
+        h_load.addWidget(self.load_project_path_label, 1)
+        btn_browse_load = QPushButton("Browse")
+        btn_browse_load.clicked.connect(self.browse_load_project_folder)
+        h_load.addWidget(btn_browse_load)
+        v_load.addLayout(h_load)
+
+        btn_load = QPushButton("Load Project")
+        btn_load.setMinimumHeight(36)
+        btn_load.clicked.connect(self.load_project)
+        v_load.addWidget(btn_load)
+
+        group_load.setLayout(v_load)
+        layout.addWidget(group_load)
+
+        # Status
+        self.status_label = QLabel("No project loaded")
+        self.status_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+        self.setLayout(layout)
+
+    # --- Browse helpers ---
+
+    def browse_template_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Template Folder",
+                                                  self._default_template_path())
+        if folder:
+            self.template_path_label.setText(folder)
+
+    def browse_new_project_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Destination Folder")
+        if folder:
+            self.new_project_path_label.setText(folder)
+
+    def browse_load_project_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Project Folder")
+        if folder:
+            self.load_project_path_label.setText(folder)
+
+    # --- Actions ---
+
+    def create_new_project(self):
+        template_dir = self.template_path_label.text()
+        dest_dir = self.new_project_path_label.text()
+
+        if not os.path.isdir(template_dir):
+            QMessageBox.warning(self, "Invalid Template", "Template folder does not exist.")
+            return
+        if dest_dir == "Not selected" or not os.path.isdir(dest_dir):
+            QMessageBox.warning(self, "Invalid Destination", "Select a valid destination folder.")
+            return
+
+        # Copy SLDASM files from template to destination
+        copied = 0
+        for name in os.listdir(template_dir):
+            if name.upper().endswith(".SLDASM") and not name.startswith("~$"):
+                src = os.path.join(template_dir, name)
+                dst = os.path.join(dest_dir, name)
+                shutil.copy2(src, dst)
+                copied += 1
+
+        if copied == 0:
+            QMessageBox.warning(self, "No Templates", "No .SLDASM files found in template folder.")
+            return
+
+        self._set_project_path(dest_dir)
+        QMessageBox.information(self, "Project Created",
+                                f"Copied {copied} template files to:\n{dest_dir}")
+
+    def load_project(self):
+        folder = self.load_project_path_label.text()
+        if folder == "Not selected" or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Invalid Folder", "Select a valid project folder.")
+            return
+
+        # Check for at least one SLDASM file
+        has_asm = any(f.upper().endswith(".SLDASM") and not f.startswith("~$")
+                      for f in os.listdir(folder))
+        if not has_asm:
+            QMessageBox.warning(self, "No Assemblies",
+                                "No .SLDASM files found in selected folder.")
+            return
+
+        self._set_project_path(folder)
+
+    def _set_project_path(self, path):
+        app = self._get_app()
+        if app:
+            app.project_path = path
+        self.status_label.setText(f"Active project: {path}")
+        self.status_label.setStyleSheet("font-weight: bold; color: #006600;")
+
+
 class ImportOptimumKTab(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-    
+
     def init_ui(self):
         layout = QVBoxLayout()
-        
+
         # Title and description
         layout.addWidget(QLabel("Import OptimumK Files"))
         layout.addWidget(QLabel("Parse Excel files to generate JSON data"))
@@ -304,21 +470,13 @@ class ImportOptimumKTab(QWidget):
         layout.addWidget(self.json_preview)
         
         # JSON file selection buttons
-        h_json = QHBoxLayout()
-        
-        btn_preview_front = QPushButton("Preview Front JSON")
-        btn_preview_front.clicked.connect(lambda: self.preview_json_file("temp/Front_Suspension.json"))
-        h_json.addWidget(btn_preview_front)
-        
-        btn_preview_rear = QPushButton("Preview Rear JSON")
-        btn_preview_rear.clicked.connect(lambda: self.preview_json_file("temp/Rear_Suspension.json"))
-        h_json.addWidget(btn_preview_rear)
-        
-        btn_preview_vehicle = QPushButton("Preview Vehicle Setup")
-        btn_preview_vehicle.clicked.connect(lambda: self.preview_json_file("temp/Vehicle_Setup.json"))
-        h_json.addWidget(btn_preview_vehicle)
-        
-        layout.addLayout(h_json)
+        grid_json = QGridLayout()
+        for i, name in enumerate(ProjectTab.COMPONENT_JSON_FILES):
+            label = name.replace("_", " ").replace(".json", "")
+            btn = QPushButton(f"Preview {label}")
+            btn.clicked.connect(lambda _checked=False, n=name: self.preview_json_file(n))
+            grid_json.addWidget(btn, i // 3, i % 3)
+        layout.addLayout(grid_json)
         
         # Status label
         self.status_label = QLabel("Ready")
@@ -337,28 +495,37 @@ class ImportOptimumKTab(QWidget):
         if not hasattr(self, "excel_file"):
             QMessageBox.warning(self, "Warning", "Please select an Excel file first")
             return
-        
+
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
+            return
+
         try:
             self.status_label.setText("Parsing Excel file...")
             parser = OptimumSheetParser(self.excel_file)
-            parser.save_json_per_sheet("temp")
-            parser.save_reference_distance("temp")
+            parser.save_json_by_component(project_path)
             self.status_label.setText("✓ Excel file parsed successfully")
-            QMessageBox.information(self, "Success", "Excel file parsed. JSON files saved to /temp")
+            QMessageBox.information(self, "Success",
+                                   f"Component JSON files saved to:\n{project_path}")
         except Exception as e:
             self.status_label.setText("✗ Parse failed")
             QMessageBox.critical(self, "Error", f"Parse failed: {str(e)}")
     
-    def preview_json_file(self, file_path):
-        full_path = os.path.join(os.path.dirname(__file__), file_path)
+    def preview_json_file(self, filename):
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
+            return
+        full_path = os.path.join(project_path, filename)
         try:
             with open(full_path, 'r') as f:
                 data = json.load(f)
-                preview_text = json.dumps(data, indent=2)
-                self.json_preview.setText(preview_text)
-                self.status_label.setText(f"✓ Previewing {os.path.basename(file_path)}")
+                self.json_preview.setText(json.dumps(data, indent=2))
+                self.status_label.setText(f"✓ Previewing {filename}")
         except FileNotFoundError:
-            QMessageBox.warning(self, "File Not Found", f"Could not find {file_path}\n\nParse an Excel file first")
+            QMessageBox.warning(self, "File Not Found",
+                                f"Could not find {filename}\n\nParse an Excel file first")
             self.status_label.setText("✗ File not found")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not preview file: {str(e)}")
@@ -471,9 +638,13 @@ class WriteSolidworksTab(QWidget):
         self.worker.start()
 
     def import_full_suspension(self):
-        front_file = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        rear_file = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
-        vehicle_file = os.path.join(os.path.dirname(__file__), "temp", "Vehicle_Setup.json")
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
+            return
+        front_file = os.path.join(project_path, "Front_Suspension.json")
+        rear_file = os.path.join(project_path, "Rear_Suspension.json")
+        vehicle_file = os.path.join(project_path, "Vehicle_Setup.json")
 
         if not all(os.path.exists(f) for f in [front_file, rear_file, vehicle_file]):
             QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first")
@@ -487,7 +658,11 @@ class WriteSolidworksTab(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
     def import_front_suspension(self):
-        front_file = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
+            return
+        front_file = os.path.join(project_path, "Front_Suspension.json")
         if not os.path.exists(front_file):
             QMessageBox.warning(self, "Missing File", "Please parse an Excel file first")
             return
@@ -499,8 +674,12 @@ class WriteSolidworksTab(QWidget):
             QMessageBox.critical(self, "Error", str(e))
 
     def import_rear_suspension(self):
-        rear_file = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
-        vehicle_file = os.path.join(os.path.dirname(__file__), "temp", "Vehicle_Setup.json")
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
+            return
+        rear_file = os.path.join(project_path, "Rear_Suspension.json")
+        vehicle_file = os.path.join(project_path, "Vehicle_Setup.json")
         if not all(os.path.exists(f) for f in [rear_file, vehicle_file]):
             QMessageBox.warning(self, "Missing Files", "Please parse an Excel file first")
             return
@@ -1060,7 +1239,7 @@ class CoordinateInsertionTab(QWidget):
         # Automatic paths
         group_files = QGroupBox("Automatic Path Configuration")
         v_files = QVBoxLayout()
-        v_files.addWidget(QLabel("JSON File: Always uses latest from /temp"))
+        v_files.addWidget(QLabel("JSON Files: Uses component JSON from project folder"))
         v_files.addWidget(QLabel("Marker Part: Always uses Marker.SLDPRT in plugin folder"))
         group_files.setLayout(v_files)
         layout.addWidget(group_files)
@@ -1068,7 +1247,7 @@ class CoordinateInsertionTab(QWidget):
         # What this does
         group_workflow = QGroupBox("What This Does")
         v_workflow = QVBoxLayout()
-        v_workflow.addWidget(QLabel("✓ Reads all hardpoints from Front_Suspension.json (including wheels)"))
+        v_workflow.addWidget(QLabel("✓ Reads hardpoints from component JSON files (Chassis, FL/FR/RL/RR Corner)"))
         v_workflow.addWidget(QLabel("✓ Inserts virtual Marker.SLDPRT at each location"))
         v_workflow.addWidget(QLabel("✓ Colors components by type (CHAS=Red, UPRI=Blue, wheels=Green, etc.)"))
         v_workflow.addWidget(QLabel("✓ Creates 'Hardpoints' folder in feature tree"))
@@ -1197,34 +1376,36 @@ class CoordinateInsertionTab(QWidget):
             self.marker_path.setText(file_path)
     
     def insert_hardpoints(self):
-        """Insert all hardpoints including wheels using automatic paths."""
-        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
-        
-        if not os.path.exists(json_path):
-            QMessageBox.warning(self, "Missing File", "Front_Suspension.json not found in /temp. Parse an Excel file first.")
+        """Insert all hardpoints including wheels using the project path."""
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
             return
-            
+
+        chassis_json = os.path.join(project_path, "Chassis.json")
+        if not os.path.exists(chassis_json):
+            QMessageBox.warning(self, "Missing File",
+                                "Chassis.json not found in project folder. Parse an Excel file first.")
+            return
+
+        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
         if not os.path.exists(marker_path):
             QMessageBox.critical(self, "Missing Marker", "Marker.SLDPRT not found in plugin root folder")
             return
-        
-        self.start_loading("Inserting all hardpoints (including wheels) from latest Front_Suspension.json...")
-        
-        # Use the hardpoint runner for comprehensive hardpoint insertion
+
+        self.start_loading("Inserting hardpoints into subassemblies...")
+
         try:
             exe_path = self._get_latest_suspension_tools_exe()
-            
-            # Run the hardpoint runner with add command for comprehensive insertion
-            cmd = [exe_path, "hardpoints", "add", json_path, marker_path]
-            
+            cmd = [exe_path, "hardpoints", "add", project_path, marker_path]
+
             self.worker = HardpointWorker(self.run_hardpoint_command, cmd)
             self.worker.log.connect(self.append_log)
             self.worker.progress.connect(self.on_progress)
             self.worker.state_changed.connect(self.on_state_changed)
             self.worker.finished.connect(self.stop_loading)
             self.worker.start()
-            
+
         except Exception as e:
             self.status_text.append(f"✗ Error: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to run hardpoint runner: {str(e)}")
@@ -1323,34 +1504,30 @@ class CoordinateInsertionTab(QWidget):
             raise e
 
     def insert_wheel_coordinates(self):
-        """Insert wheel coordinates using automatic paths."""
-        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
-        
-        if not os.path.exists(json_path):
-            QMessageBox.warning(self, "Missing File", "Front_Suspension.json not found in /temp. Parse an Excel file first.")
+        """Insert wheel coordinates using the project path."""
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
             return
-            
+
+        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
         if not os.path.exists(marker_path):
             QMessageBox.critical(self, "Missing Marker", "Marker.SLDPRT not found in plugin root folder")
             return
-        
-        self.start_loading("Inserting wheel coordinates from latest Front_Suspension.json...")
-        
-        # Use the hardpoint runner for wheel insertion
+
+        self.start_loading("Inserting wheel coordinates...")
+
         try:
             exe_path = self._get_latest_suspension_tools_exe()
-            
-            # Run the hardpoint runner with addwheels command
-            cmd = [exe_path, "hardpoints", "addwheels", json_path, marker_path]
-            
+            cmd = [exe_path, "hardpoints", "addwheels", project_path, marker_path]
+
             self.worker = HardpointWorker(self.run_hardpoint_command, cmd)
             self.worker.log.connect(self.append_log)
             self.worker.progress.connect(self.on_progress)
             self.worker.state_changed.connect(self.on_state_changed)
             self.worker.finished.connect(self.stop_loading)
             self.worker.start()
-            
+
         except Exception as e:
             self.status_text.append(f"✗ Error: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to run hardpoint runner: {str(e)}")
@@ -1514,37 +1691,38 @@ class PoseCreationTab(QWidget):
             self.json_path.setText(file_path)
     
     def create_pose(self):
-        """Insert pose using latest parsed temp JSON files."""
-        json_path = os.path.join(os.path.dirname(__file__), "temp", "Front_Suspension.json")
-        rear_json_path = os.path.join(os.path.dirname(__file__), "temp", "Rear_Suspension.json")
+        """Insert pose using component JSON files from the project folder."""
+        project_path = get_project_path(self)
+        if not project_path:
+            QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
+            return
+
         pose_name = self.pose_name.text().strip()
 
         if not pose_name:
             QMessageBox.warning(self, "Warning", "Pose name cannot be empty")
             return
-            
+
         if not re.match(r"^[a-zA-Z0-9_\- ]+$", pose_name):
-            QMessageBox.warning(self, "Invalid Name", 
+            QMessageBox.warning(self, "Invalid Name",
                 "Pose name can only contain letters, numbers, spaces, hyphens and underscores")
             return
-        
-        # Validate pose name
+
         valid, message = validate_pose_name(pose_name)
         if not valid:
             QMessageBox.warning(self, "Invalid Pose Name", message)
             return
-        
-        # Validate required temp files
-        if not os.path.exists(json_path):
-            QMessageBox.warning(self, "Missing File", "Front_Suspension.json not found in /temp. Parse an Excel file first.")
+
+        chassis_json = os.path.join(project_path, "Chassis.json")
+        if not os.path.exists(chassis_json):
+            QMessageBox.warning(self, "Missing File",
+                                "Chassis.json not found in project folder. Parse an Excel file first.")
             return
-        if not os.path.exists(rear_json_path):
-            QMessageBox.warning(self, "Missing File", "Rear_Suspension.json not found in /temp. Parse an Excel file first.")
-            return
-        
-        self.start_loading(f"Inserting pose '{pose_name}' from temp suspension files...")
-        
-        self.worker = PoseCreationWorker(insert_pose, json_path, pose_name)
+
+        self.start_loading(f"Inserting pose '{pose_name}' from project folder...")
+
+        # Pass the project directory (which contains all 5 component JSON files)
+        self.worker = PoseCreationWorker(insert_pose, project_path, pose_name)
         self.worker.log.connect(self.append_log)
         self.worker.progress.connect(self.on_progress)
         self.worker.state_changed.connect(self.on_state_changed)
@@ -1788,23 +1966,35 @@ class HelpTab(QWidget):
         self.setLayout(layout)
 
 
+def get_project_path(widget):
+    """Walk up from any child widget to find the active project path on OptimumKApp."""
+    w = widget.parent()
+    while w is not None:
+        if isinstance(w, OptimumKApp):
+            return getattr(w, "project_path", None)
+        w = w.parent()
+    return None
+
+
 class OptimumKApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.project_path = None
         self.init_ui()
-    
+
     def init_ui(self):
         self.setWindowTitle("OptimumK SolidWorks Plugin")
         self.setGeometry(100, 100, 700, 700)
-        
+
         tabs = QTabWidget()
-        
+
+        tabs.addTab(ProjectTab(), "Project")
         tabs.addTab(ImportOptimumKTab(), "Parse")
-        tabs.addTab(CoordinateInsertionTab(), "Insert Coordinates") 
+        tabs.addTab(CoordinateInsertionTab(), "Insert Coordinates")
         tabs.addTab(PoseCreationTab(), "Write Pose")
         tabs.addTab(VisualizationControlTab(), "Visualization")
         tabs.addTab(HelpTab(), "Help")
-        
+
         self.setCentralWidget(tabs)
 
 
