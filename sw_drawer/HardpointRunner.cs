@@ -1010,30 +1010,37 @@ namespace sw_drawer
                         continue;
                     }
 
-                    // Select the subassembly and enter its edit context
-                    swModel.ClearSelection2(true);
-                    subassyComp.Select4(false, null, false);
-                    swAssy.EditAssembly();
-
-                    Component2 editTarget = swAssy.GetEditTarget() as Component2;
-                    if (editTarget == null)
+                    // Activate the subassembly document directly
+                    ModelDoc2 subassyModel = subassyComp.GetModelDoc2() as ModelDoc2;
+                    if (subassyModel == null)
                     {
-                        Console.WriteLine($"Warning: Could not enter edit mode for '{subassyName}'");
-                        swModel.ClearSelection2(true);
-                        swAssy.EditAssembly();
+                        Console.WriteLine($"Warning: Could not get model for '{subassyName}'");
                         progressCount += hardpoints.Count * 2 + 1;
                         ReportProgress(progressCount);
                         continue;
                     }
-                    Console.WriteLine($"Editing subassembly: {editTarget.Name2}");
 
-                    ModelDoc2 subassyModel = subassyComp.GetModelDoc2() as ModelDoc2;
+                    string subassyTitle = subassyModel.GetTitle();
+                    int activateErr = 0;
+                    swApp.ActivateDoc2(subassyTitle, false, ref activateErr);
+                    ModelDoc2 activeSubModel = (ModelDoc2)swApp.ActiveDoc;
+                    AssemblyDoc activeSubAssy = activeSubModel as AssemblyDoc;
+
+                    if (activeSubAssy == null)
+                    {
+                        Console.WriteLine($"Warning: Could not activate '{subassyTitle}' as assembly");
+                        swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
+                        progressCount += hardpoints.Count * 2 + 1;
+                        ReportProgress(progressCount);
+                        continue;
+                    }
+
+                    Console.WriteLine($"Activated subassembly for pose: {subassyTitle}");
 
                     // Gather hardpoint components inside this subassembly for mate matching
-                    AssemblyDoc subassyAsAssy = subassyModel as AssemblyDoc;
-                    object[] subComponents = subassyAsAssy?.GetComponents(false) as object[];
+                    object[] subComponents = activeSubAssy.GetComponents(false) as object[];
                     List<Component2> hardpointComponents = subComponents != null
-                        ? InsertPoseGetComponentsForPoseMatching(subassyModel, subComponents)
+                        ? InsertPoseGetComponentsForPoseMatching(activeSubModel, subComponents)
                         : new List<Component2>();
 
                     var poseCoordFeatures = new List<Feature>();
@@ -1043,9 +1050,8 @@ namespace sw_drawer
                         string hardpointName = $"{hardpoint.BaseName}{hardpoint.Suffix}";
                         string poseCoordName = $"{poseName} {hardpointName}";
 
-                        // Insert coordinate system feature into the subassembly model
                         Feature csFeat = InsertCoordinate.InsertCoordinateSystemFeature(
-                            subassyModel,
+                            activeSubModel,
                             poseCoordName,
                             hardpoint.X,
                             hardpoint.Y,
@@ -1059,7 +1065,7 @@ namespace sw_drawer
 
                         if (csFeat != null)
                         {
-                            ConfigurationSync.ScopeFeatureToConfiguration(subassyModel, csFeat, activeConfigName);
+                            ConfigurationSync.ScopeFeatureToConfiguration(activeSubModel, csFeat, activeConfigName);
                             poseCoordFeatures.Add(csFeat);
                         }
 
@@ -1070,10 +1076,9 @@ namespace sw_drawer
                         if (targetComp != null)
                         {
                             Console.WriteLine($"Matched hardpoint '{hardpointName}' to component '{targetComp.Name2}'");
-                            // Use top-level swModel/swAssy for mate creation — routed into edit context
                             InsertPoseCreateCoordinateSystemMate(
-                                swModel,
-                                swAssy,
+                                activeSubModel,
+                                activeSubAssy,
                                 targetComp,
                                 hardpointName,
                                 poseCoordName,
@@ -1090,15 +1095,17 @@ namespace sw_drawer
 
                     // Create transforms folder inside subassembly
                     ReportState(HardpointState.CreatingTransformsFolder);
-                    InsertPoseCreateOrPopulateTransformsFolder(subassyModel, poseCoordFeatures, $"{poseName} Transforms");
+                    InsertPoseCreateOrPopulateTransformsFolder(activeSubModel, poseCoordFeatures, $"{poseName} Transforms");
                     progressCount++;
                     ReportProgress(progressCount);
 
                     totalPoseFeatures += poseCoordFeatures.Count;
 
-                    // Return to top-level: EditAssembly with nothing selected goes up
-                    swModel.ClearSelection2(true);
-                    ((AssemblyDoc)swModel).EditAssembly();
+                    // Save the subassembly and reactivate the top-level
+                    activeSubModel.Save3(
+                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
+                        ref activateErr, ref activateErr);
+                    swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
                 }
 
                 ReportState(HardpointState.Rebuilding);

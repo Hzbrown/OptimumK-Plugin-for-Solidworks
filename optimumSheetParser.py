@@ -114,13 +114,11 @@ class OptimumSheetParser:
             y_r = f(row[right_y_idx]) if right_y_idx is not None and right_y_idx < len(row) else y_l
             z_r = f(row[right_z_idx]) if right_z_idx is not None and right_z_idx < len(row) else z_l
 
-            # Keep your "None -> 0" behavior:
-            points[f"{name}_L"] = [x_l if x_l is not None else 0.0,
-                                  y_l if y_l is not None else 0.0,
-                                  z_l if z_l is not None else 0.0]
-            points[f"{name}_R"] = [x_r if x_r is not None else 0.0,
-                                  y_r if y_r is not None else 0.0,
-                                  z_r if z_r is not None else 0.0]
+            # Drop points where all coordinates are missing (non-numeric cells)
+            if x_l is not None or y_l is not None or z_l is not None:
+                points[f"{name}_L"] = [x_l or 0.0, y_l or 0.0, z_l or 0.0]
+            if x_r is not None or y_r is not None or z_r is not None:
+                points[f"{name}_R"] = [x_r or 0.0, y_r or 0.0, z_r or 0.0]
 
         return points
 
