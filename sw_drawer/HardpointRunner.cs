@@ -978,15 +978,15 @@ namespace sw_drawer
                 if (totalHardpoints == 0)
                 { Console.WriteLine("Error: No hardpoints found in component JSON files"); return false; }
 
-                ConfigurationManager cfgMgr = swModel.ConfigurationManager;
-                Configuration activeCfg = cfgMgr != null ? cfgMgr.ActiveConfiguration : null;
-                if (activeCfg == null)
-                { Console.WriteLine("Error: Could not determine active configuration"); return false; }
-                string activeConfigName = activeCfg.Name;
-                Console.WriteLine($"Active configuration: {activeConfigName}");
+                // Create (or reuse) a configuration named after the pose in the entire hierarchy
+                ConfigurationSync.CreateConfigurationInHierarchy(swAssy, swModel, poseName);
 
-                // Sync subassembly configurations to match top-level
-                ConfigurationSync.SyncSubassemblyConfigurations(swAssy, activeConfigName);
+                // Switch top-level to the pose configuration
+                swModel.ShowConfiguration2(poseName);
+                Console.WriteLine($"Switched to configuration: {poseName}");
+
+                // Sync all subassembly referenced configs to match
+                ConfigurationSync.SyncSubassemblyConfigurations(swAssy, poseName);
 
                 int totalSteps = totalHardpoints * 2 + componentGroups.Count + 1;
                 Console.WriteLine($"TOTAL:{totalSteps}");
@@ -1065,7 +1065,7 @@ namespace sw_drawer
 
                         if (csFeat != null)
                         {
-                            ConfigurationSync.ScopeFeatureToConfiguration(activeSubModel, csFeat, activeConfigName);
+                            ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(activeSubModel, csFeat, poseName);
                             poseCoordFeatures.Add(csFeat);
                         }
 
@@ -1082,7 +1082,7 @@ namespace sw_drawer
                                 targetComp,
                                 hardpointName,
                                 poseCoordName,
-                                activeConfigName);
+                                poseName);
                         }
                         else
                         {
@@ -1114,7 +1114,7 @@ namespace sw_drawer
                 ReportProgress(progressCount);
 
                 ReportState(HardpointState.Complete);
-                Console.WriteLine($"Inserted pose '{poseName}' for {totalPoseFeatures} hardpoints in config '{activeConfigName}'");
+                Console.WriteLine($"Inserted pose '{poseName}' for {totalPoseFeatures} hardpoints in config '{poseName}'");
                 return true;
             }
             catch (Exception ex)
@@ -1423,7 +1423,7 @@ namespace sw_drawer
                             Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
                         }
 
-                        ConfigurationSync.ScopeFeatureToConfiguration(swModel, mateFeature, activeConfigName);
+                        ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(swModel, mateFeature, activeConfigName);
                     }
                 }
 

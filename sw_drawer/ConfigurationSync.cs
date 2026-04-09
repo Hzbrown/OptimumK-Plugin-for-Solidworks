@@ -99,6 +99,29 @@ namespace sw_drawer
         }
 
         /// <summary>
+        /// Future-proof scoping: suppress <paramref name="feat"/> in ALL configurations
+        /// (including any created later), then unsuppress ONLY in <paramref name="targetConfigName"/>.
+        /// </summary>
+        internal static void ScopeFeatureExclusivelyToConfiguration(
+            ModelDoc2 swModel, Feature feat, string targetConfigName)
+        {
+            if (swModel == null || feat == null || string.IsNullOrWhiteSpace(targetConfigName))
+                return;
+
+            // Suppress in all configurations (covers future ones too)
+            feat.SetSuppression2(
+                (int)swFeatureSuppressionAction_e.swSuppressFeature,
+                (int)swInConfigurationOpts_e.swAllConfiguration,
+                null);
+
+            // Unsuppress only in the target configuration
+            feat.SetSuppression2(
+                (int)swFeatureSuppressionAction_e.swUnSuppressFeature,
+                (int)swInConfigurationOpts_e.swSpecifyConfiguration,
+                new string[] { targetConfigName });
+        }
+
+        /// <summary>
         /// Return the configuration named <paramref name="configName"/>, creating it if absent.
         /// </summary>
         internal static Configuration GetOrCreateConfiguration(ModelDoc2 swModel, string configName)
