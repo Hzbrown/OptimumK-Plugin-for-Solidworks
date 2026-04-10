@@ -220,22 +220,22 @@ class OptimumSheetParser:
                             return {"Reference distance": val}
         return {"Reference distance": None}
 
-    # Prefixes that belong to the Chassis subassembly
-    CHASSIS_PREFIXES = ("CHAS_",)
+    # Prefixes that belong to the Inboard subassembly (chassis-mounted pickup points)
+    INBOARD_PREFIXES = ("CHAS_",)
     # Prefixes that belong to Corner subassemblies
     CORNER_PREFIXES = ("UPRI_", "NSMA_", "ROCK_")
 
     def save_json_by_component(self, results_dir: str = "temp"):
         """
         Save parsed data as 5 component-based JSON files matching the SolidWorks
-        subassembly structure: Chassis, FL_Corner, FR_Corner, RL_Corner, RR_Corner.
+        subassembly structure: Inboard, FL_Corner, FR_Corner, RL_Corner, RR_Corner.
         Also saves Vehicle_Setup.json for reference distance.
         """
         base_dir = pathlib.Path(results_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
         parsed = self.parse()
 
-        chassis = {"Front": {}, "Rear": {}}
+        inboard = {"Front": {}, "Rear": {}}
         corners = {
             "FL_Corner": {},
             "FR_Corner": {},
@@ -254,10 +254,10 @@ class OptimumSheetParser:
                 if block_name == "Wheels":
                     self._distribute_wheels(block_data, axle, corners)
                 else:
-                    self._distribute_points(block_data, axle, chassis, corners)
+                    self._distribute_points(block_data, axle, inboard, corners)
 
-        # Write Chassis.json
-        self._write_json(base_dir / "Chassis.json", chassis)
+        # Write Inboard.json
+        self._write_json(base_dir / "Inboard.json", inboard)
 
         # Write corner files
         for corner_name, corner_data in corners.items():
@@ -266,7 +266,7 @@ class OptimumSheetParser:
         # Also save reference distance
         self.save_reference_distance(results_dir)
 
-        file_count = 1 + len(corners)  # Chassis + 4 corners
+        file_count = 1 + len(corners)  # Inboard + 4 corners
         print(f"Saved {file_count} component files + Vehicle_Setup.json to {base_dir}")
 
     @staticmethod
@@ -280,15 +280,15 @@ class OptimumSheetParser:
         return None
 
     def _distribute_points(self, block_data: dict, axle: str,
-                           chassis: dict, corners: dict):
-        """Sort hardpoints from a block into Chassis or the correct Corner."""
+                           inboard: dict, corners: dict):
+        """Sort hardpoints from a block into Inboard or the correct Corner."""
         if not isinstance(block_data, dict):
             return
         for point_name, coords in block_data.items():
             if not isinstance(coords, list):
                 continue
-            if self._is_chassis_point(point_name):
-                chassis[axle][point_name] = coords
+            if self._is_inboard_point(point_name):
+                inboard[axle][point_name] = coords
             else:
                 corner_key = self._resolve_corner(point_name, axle)
                 if corner_key:
@@ -314,8 +314,8 @@ class OptimumSheetParser:
         if right_wheels:
             corners[right_key]["Wheels"] = right_wheels
 
-    def _is_chassis_point(self, point_name: str) -> bool:
-        return any(point_name.startswith(p) for p in self.CHASSIS_PREFIXES)
+    def _is_inboard_point(self, point_name: str) -> bool:
+        return any(point_name.startswith(p) for p in self.INBOARD_PREFIXES)
 
     @staticmethod
     def _resolve_corner(point_name: str, axle: str) -> str | None:

@@ -275,7 +275,7 @@ class ProjectTab(QWidget):
 
     TEMPLATE_SUBDIR = "Solidworks Project Template"
     COMPONENT_JSON_FILES = [
-        "Chassis.json", "FL_Corner.json", "FR_Corner.json",
+        "Inboard.json", "FL_Corner.json", "FR_Corner.json",
         "RL_Corner.json", "RR_Corner.json", "Vehicle_Setup.json",
     ]
 
@@ -392,6 +392,10 @@ class ProjectTab(QWidget):
             return
         if dest_dir == "Not selected" or not os.path.isdir(dest_dir):
             QMessageBox.warning(self, "Invalid Destination", "Select a valid destination folder.")
+            return
+        if os.path.abspath(template_dir) == os.path.abspath(dest_dir):
+            QMessageBox.warning(self, "Same Folder",
+                                "Destination cannot be the same as the template folder.")
             return
 
         # Copy SLDASM files from template to destination
@@ -1248,7 +1252,7 @@ class CoordinateInsertionTab(QWidget):
         # What this does
         group_workflow = QGroupBox("What This Does")
         v_workflow = QVBoxLayout()
-        v_workflow.addWidget(QLabel("✓ Reads hardpoints from component JSON files (Chassis, FL/FR/RL/RR Corner)"))
+        v_workflow.addWidget(QLabel("✓ Reads hardpoints from component JSON files (Inboard, FL/FR/RL/RR Corner)"))
         v_workflow.addWidget(QLabel("✓ Inserts virtual Marker.SLDPRT at each location"))
         v_workflow.addWidget(QLabel("✓ Colors components by type (CHAS=Red, UPRI=Blue, wheels=Green, etc.)"))
         v_workflow.addWidget(QLabel("✓ Creates 'Hardpoints' folder in feature tree"))
@@ -1383,10 +1387,10 @@ class CoordinateInsertionTab(QWidget):
             QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
             return
 
-        chassis_json = os.path.join(project_path, "Chassis.json")
-        if not os.path.exists(chassis_json):
+        inboard_json = os.path.join(project_path, "Inboard.json")
+        if not os.path.exists(inboard_json):
             QMessageBox.warning(self, "Missing File",
-                                "Chassis.json not found in project folder. Parse an Excel file first.")
+                                "Inboard.json not found in project folder. Parse an Excel file first.")
             return
 
         marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
@@ -1808,10 +1812,10 @@ class PoseCreationTab(QWidget):
             QMessageBox.warning(self, "Invalid Pose Name", message)
             return
 
-        chassis_json = os.path.join(project_path, "Chassis.json")
-        if not os.path.exists(chassis_json):
+        inboard_json = os.path.join(project_path, "Inboard.json")
+        if not os.path.exists(inboard_json):
             QMessageBox.warning(self, "Missing File",
-                                "Chassis.json not found in project folder. Parse an Excel file first.")
+                                "Inboard.json not found in project folder. Parse an Excel file first.")
             return
 
         self.start_loading(f"Inserting pose '{pose_name}' from project folder...")

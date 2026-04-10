@@ -114,77 +114,82 @@ namespace sw_drawer
                         continue;
                     }
 
-                    // Activate the subassembly document directly so we can add components to it.
+                    // In-context edit: select the subassembly at top level and call
+                    // EditAssembly(). This is a selection-state toggle — with a
+                    // component selected, it ENTERS that subassembly's edit context.
+                    // Matches the VBA pattern: SelectByID2 + Part.EditAssembly.
+                    string assyTitle = swModel.GetTitle();
+                    string compFullName = $"{subassyComp.Name2}@{assyTitle}";
+                    swModel.ClearSelection2(true);
+                    bool selected = swModel.Extension.SelectByID2(
+                        compFullName, "COMPONENT", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (!selected)
+                    {
+                        Console.WriteLine($"Warning: Could not select '{compFullName}' for edit context");
+                        progressCount += hardpoints.Count * 6 + 1;
+                        ReportProgress(progressCount);
+                        continue;
+                    }
+                    swAssy.EditAssembly();
+                    Console.WriteLine($"Entered in-context edit for '{subassyComp.Name2}'");
+
+                    // Get the subassembly's underlying ModelDoc2 for feature-tree ops
+                    // (folder creation walks this model's features). The edit context
+                    // is acting on this same model.
                     ModelDoc2 subassyModel = subassyComp.GetModelDoc2() as ModelDoc2;
-                    if (subassyModel == null)
-                    {
-                        Console.WriteLine($"Warning: Could not get model for '{subassyName}'");
-                        progressCount += hardpoints.Count * 6 + 1;
-                        ReportProgress(progressCount);
-                        continue;
-                    }
-
-                    string subassyTitle = subassyModel.GetTitle();
-                    int activateErr = 0;
-                    swApp.ActivateDoc2(subassyTitle, false, ref activateErr);
-                    ModelDoc2 activeSubModel = (ModelDoc2)swApp.ActiveDoc;
-                    AssemblyDoc activeSubAssy = activeSubModel as AssemblyDoc;
-
-                    if (activeSubAssy == null)
-                    {
-                        Console.WriteLine($"Warning: Could not activate '{subassyTitle}' as assembly");
-                        // Reactivate top-level
-                        swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
-                        progressCount += hardpoints.Count * 6 + 1;
-                        ReportProgress(progressCount);
-                        continue;
-                    }
-
-                    Console.WriteLine($"Activated subassembly: {subassyTitle}");
-                    activeSubAssy.EditAssembly();
 
                     var insertedParts = new List<VirtualPartInfo>();
 
                     foreach (var hardpoint in hardpoints)
                     {
-                        var partInfo = InsertVirtualMarkerPart(activeSubAssy, markerDoc, hardpoint);
+                        // Top-level swAssy routes the insert into the active edit context
+                        var partInfo = InsertVirtualMarkerPart(swAssy, markerDoc, hardpoint);
                         if (partInfo == null) continue;
+
+                        // Diagnostic on first iteration only: verify the new component
+                        // landed inside the subassembly, not at the top level
+                        if (insertedParts.Count == 0)
+                        {
+                            Component2 parentComp = partInfo.Component.GetParent() as Component2;
+                            string parentName = parentComp != null ? parentComp.Name2 : "<top level>";
+                            Console.WriteLine($"  First inserted part parent: {parentName}");
+                        }
+
                         progressCount++; ReportProgress(progressCount);
 
                         MakeComponentVirtual(partInfo);
                         progressCount++; ReportProgress(progressCount);
 
-                        RenameVirtualPart(activeSubAssy, partInfo);
+                        RenameVirtualPart(swAssy, partInfo);
                         progressCount++; ReportProgress(progressCount);
 
-                        FloatComponent(activeSubAssy, activeSubModel, partInfo);
+                        FloatComponent(swAssy, swModel, partInfo);
                         progressCount++; ReportProgress(progressCount);
 
                         if (IsWheelHardpoint(partInfo.BaseName))
-                            RenameAndOrientWheelCoordinateSystem(swApp, activeSubAssy, activeSubModel, partInfo);
+                            RenameAndOrientWheelCoordinateSystem(swApp, swAssy, swModel, partInfo);
                         else
-                            RenameInternalCoordinateSystem(swApp, activeSubAssy, activeSubModel, partInfo);
+                            RenameInternalCoordinateSystem(swApp, swAssy, swModel, partInfo);
                         progressCount++; ReportProgress(progressCount);
 
-                        ApplyColorToVirtualPart(activeSubAssy, partInfo);
+                        ApplyColorToVirtualPart(swAssy, partInfo);
                         progressCount++; ReportProgress(progressCount);
 
                         insertedParts.Add(partInfo);
                     }
 
-                    // Create folder inside the subassembly
+                    // Create folder inside the subassembly's feature tree
                     ReportState(HardpointState.CreatingHardpointsFolder);
                     if (insertedParts.Count > 0)
-                        CreateContainingFolderFromComponents(activeSubModel, "Hardpoints", insertedParts);
+                        CreateContainingFolderFromComponents(subassyModel ?? swModel, "Hardpoints", insertedParts);
                     progressCount++; ReportProgress(progressCount);
 
                     totalInserted += insertedParts.Count;
 
-                    // Save the subassembly and reactivate the top-level
-                    activeSubModel.Save3(
-                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
-                        ref activateErr, ref activateErr);
-                    swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
+                    // Exit back to the top-level assembly
+                    swModel.ClearSelection2(true);
+                    swAssy.EditAssembly();
                 }
 
                 // Final rebuild
@@ -1010,48 +1015,49 @@ namespace sw_drawer
                         continue;
                     }
 
-                    // Activate the subassembly document directly
+                    // Enter in-context edit for this subassembly
+                    string assyTitlePose = swModel.GetTitle();
+                    string compFullNamePose = $"{subassyComp.Name2}@{assyTitlePose}";
+                    swModel.ClearSelection2(true);
+                    bool selectedPose = swModel.Extension.SelectByID2(
+                        compFullNamePose, "COMPONENT", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (!selectedPose)
+                    {
+                        Console.WriteLine($"Warning: Could not select '{compFullNamePose}' for edit context");
+                        progressCount += hardpoints.Count * 2 + 1;
+                        ReportProgress(progressCount);
+                        continue;
+                    }
+                    swAssy.EditAssembly();
+                    Console.WriteLine($"Entered in-context edit for '{subassyComp.Name2}'");
+
+                    // Get the subassembly's ModelDoc2 for feature-tree ops and mate matching.
+                    // Pose CSys features, coordinate mates, and folders all get created
+                    // directly on this doc — not routed through the top-level — so the
+                    // top-level SelectByID2 can't resolve their bare names later.
                     ModelDoc2 subassyModel = subassyComp.GetModelDoc2() as ModelDoc2;
-                    if (subassyModel == null)
-                    {
-                        Console.WriteLine($"Warning: Could not get model for '{subassyName}'");
-                        progressCount += hardpoints.Count * 2 + 1;
-                        ReportProgress(progressCount);
-                        continue;
-                    }
-
-                    string subassyTitle = subassyModel.GetTitle();
-                    int activateErr = 0;
-                    swApp.ActivateDoc2(subassyTitle, false, ref activateErr);
-                    ModelDoc2 activeSubModel = (ModelDoc2)swApp.ActiveDoc;
-                    AssemblyDoc activeSubAssy = activeSubModel as AssemblyDoc;
-
-                    if (activeSubAssy == null)
-                    {
-                        Console.WriteLine($"Warning: Could not activate '{subassyTitle}' as assembly");
-                        swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
-                        progressCount += hardpoints.Count * 2 + 1;
-                        ReportProgress(progressCount);
-                        continue;
-                    }
-
-                    Console.WriteLine($"Activated subassembly for pose: {subassyTitle}");
+                    AssemblyDoc subassyAssyDoc = subassyModel as AssemblyDoc;
 
                     // Gather hardpoint components inside this subassembly for mate matching
-                    object[] subComponents = activeSubAssy.GetComponents(false) as object[];
+                    object[] subComponents = subassyAssyDoc?.GetComponents(false) as object[];
                     List<Component2> hardpointComponents = subComponents != null
-                        ? InsertPoseGetComponentsForPoseMatching(activeSubModel, subComponents)
+                        ? InsertPoseGetComponentsForPoseMatching(subassyModel, subComponents)
                         : new List<Component2>();
 
                     var poseCoordFeatures = new List<Feature>();
+                    var poseMateFeatures = new List<Feature>();
 
                     foreach (var hardpoint in hardpoints)
                     {
                         string hardpointName = $"{hardpoint.BaseName}{hardpoint.Suffix}";
                         string poseCoordName = $"{poseName} {hardpointName}";
 
+                        // Create the pose CSys directly on the subassembly's doc so the
+                        // feature lives in the sub's tree and can be selected by bare name
+                        // from subassyModel.Extension later (top-level can't resolve it).
                         Feature csFeat = InsertCoordinate.InsertCoordinateSystemFeature(
-                            activeSubModel,
+                            subassyModel,
                             poseCoordName,
                             hardpoint.X,
                             hardpoint.Y,
@@ -1065,7 +1071,12 @@ namespace sw_drawer
 
                         if (csFeat != null)
                         {
-                            ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(activeSubModel, csFeat, poseName);
+                            // Diagnostic on first iteration: verify the CSys landed in
+                            // the subassembly (owned model) not the top-level
+                            if (poseCoordFeatures.Count == 0)
+                                Console.WriteLine($"  First pose CSys created: '{csFeat.Name}' (type {csFeat.GetTypeName2()})");
+
+                            ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(subassyModel, csFeat, poseName);
                             poseCoordFeatures.Add(csFeat);
                         }
 
@@ -1076,13 +1087,17 @@ namespace sw_drawer
                         if (targetComp != null)
                         {
                             Console.WriteLine($"Matched hardpoint '{hardpointName}' to component '{targetComp.Name2}'");
-                            InsertPoseCreateCoordinateSystemMate(
-                                activeSubModel,
-                                activeSubAssy,
+                            // Pass the subassembly's own model/assy handles — AddMate5 lands
+                            // the mate in the sub's MateGroup, SelectByID2 uses the sub's title.
+                            Feature mateFeat = InsertPoseCreateCoordinateSystemMate(
+                                subassyModel,
+                                subassyAssyDoc,
                                 targetComp,
                                 hardpointName,
                                 poseCoordName,
                                 poseName);
+                            if (mateFeat != null)
+                                poseMateFeatures.Add(mateFeat);
                         }
                         else
                         {
@@ -1093,19 +1108,21 @@ namespace sw_drawer
                         ReportProgress(progressCount);
                     }
 
-                    // Create transforms folder inside subassembly
+                    // Create transforms folder inside the subassembly's feature tree
                     ReportState(HardpointState.CreatingTransformsFolder);
-                    InsertPoseCreateOrPopulateTransformsFolder(activeSubModel, poseCoordFeatures, $"{poseName} Transforms");
+                    InsertPoseCreateOrPopulateTransformsFolder(subassyModel, poseCoordFeatures, $"{poseName} Transforms");
+
+                    // Create mates folder inside the MateGroup
+                    InsertPoseCreateOrPopulateMatesFolder(subassyModel, poseMateFeatures, $"{poseName} Mates");
+
                     progressCount++;
                     ReportProgress(progressCount);
 
                     totalPoseFeatures += poseCoordFeatures.Count;
 
-                    // Save the subassembly and reactivate the top-level
-                    activeSubModel.Save3(
-                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
-                        ref activateErr, ref activateErr);
-                    swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
+                    // Exit back to the top-level assembly
+                    swModel.ClearSelection2(true);
+                    swAssy.EditAssembly();
                 }
 
                 ReportState(HardpointState.Rebuilding);
@@ -1228,7 +1245,10 @@ namespace sw_drawer
 
             int totalDeleted = 0;
 
-            // Delete from each subassembly
+            // Delete from each subassembly — operate directly on the sub's loaded doc
+            // so the top-level assembly stays the active document throughout (no
+            // title-bar flipping). DeletePoseFromModel only touches the passed model's
+            // FirstFeature / EditDelete / MateGroup, so no active-doc switch is needed.
             object[] components = swAssy.GetComponents(false) as object[];
             if (components != null)
             {
@@ -1239,17 +1259,7 @@ namespace sw_drawer
                     if (compDoc == null || compDoc.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
                         continue;
 
-                    string subTitle = compDoc.GetTitle();
-                    int activateErr = 0;
-                    swApp.ActivateDoc2(subTitle, false, ref activateErr);
-                    ModelDoc2 activeDoc = (ModelDoc2)swApp.ActiveDoc;
-
-                    totalDeleted += DeletePoseFromModel(activeDoc, poseName);
-
-                    activeDoc.Save3(
-                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
-                        ref activateErr, ref activateErr);
-                    swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
+                    totalDeleted += DeletePoseFromModel(compDoc, poseName);
                 }
             }
 
@@ -1268,7 +1278,8 @@ namespace sw_drawer
         {
             if (swModel == null) return 0;
 
-            string folderName = $"{poseName} Transforms";
+            string transformsFolderName = $"{poseName} Transforms";
+            string matesFolderName = $"{poseName} Mates";
             string posePrefix = $"{poseName} ";
             int deleted = 0;
 
@@ -1279,7 +1290,9 @@ namespace sw_drawer
                 string typeName = feat.GetTypeName2();
                 string name = feat.Name;
 
-                if (typeName == "FtrFolder" && string.Equals(name, folderName, StringComparison.OrdinalIgnoreCase))
+                if (typeName == "FtrFolder" &&
+                    (string.Equals(name, transformsFolderName, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(name, matesFolderName, StringComparison.OrdinalIgnoreCase)))
                     toDelete.Add(feat);
                 else if (typeName == "CoordSys" && name.StartsWith(posePrefix, StringComparison.OrdinalIgnoreCase))
                     toDelete.Add(feat);
@@ -1597,7 +1610,7 @@ namespace sw_drawer
             return normalized.Trim();
         }
 
-        private static void InsertPoseCreateCoordinateSystemMate(
+        private static Feature InsertPoseCreateCoordinateSystemMate(
             ModelDoc2 swModel,
             AssemblyDoc swAssy,
             Component2 comp,
@@ -1609,13 +1622,14 @@ namespace sw_drawer
                 string.IsNullOrWhiteSpace(componentCoordName) ||
                 string.IsNullOrWhiteSpace(poseCoordName))
             {
-                return;
+                return null;
             }
 
             try
             {
                 swModel.ClearSelection2(true);
 
+                // First selection: the pose-level coordinate system in the subassembly
                 bool csSelected = swModel.Extension.SelectByID2(
                     poseCoordName,
                     "COORDSYS",
@@ -1629,11 +1643,20 @@ namespace sw_drawer
                 {
                     Console.WriteLine($"Warning: Could not select pose CSys '{poseCoordName}' for mate");
                     swModel.ClearSelection2(true);
-                    return;
+                    return null;
                 }
 
+                // Second selection: the coordinate system INSIDE the virtual-part component.
+                // Build the path using the instance name format SW uses when the subassembly
+                // is the active doc. Virtual parts have "Name^ParentAssy-N" as Name2.
+                string assyTitle = swModel.GetTitle();
+                string compPath = componentCoordName + "@" + comp.Name2 + "@" + assyTitle;
+                Console.WriteLine($"  Attempting selection: '{compPath}'");
+
+                // COORDINATE mate (AddMate5 with swMateCOORDINATE) wants both entities
+                // at selection mark 1, not split between marks 1 and 2 like coincident mates.
                 bool compCsSelected = swModel.Extension.SelectByID2(
-                    componentCoordName + "@" + comp.Name2 + "@" + swModel.GetTitle(),
+                    compPath,
                     "COORDSYS",
                     0, 0, 0,
                     true,
@@ -1643,53 +1666,235 @@ namespace sw_drawer
 
                 if (!compCsSelected)
                 {
-                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
-                    swModel.ClearSelection2(true);
-                    return;
+                    compCsSelected = TrySelectComponentCoordSystem(swModel, comp, componentCoordName);
                 }
 
+                if (!compCsSelected)
+                {
+                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
+                    swModel.ClearSelection2(true);
+                    return null;
+                }
+
+                // Verify both selections are present before AddMate5
+                SelectionMgr selMgrVerify = swModel.SelectionManager as SelectionMgr;
+                int selCount = selMgrVerify?.GetSelectedObjectCount2(-1) ?? 0;
+                Console.WriteLine($"  Selection count before AddMate5: {selCount}");
+                if (selCount < 2)
+                {
+                    Console.WriteLine($"Warning: Expected 2 selections for mate, got {selCount}");
+                    swModel.ClearSelection2(true);
+                    return null;
+                }
+
+                // Snapshot existing mate feature names BEFORE AddMate5 so we can diff after
+                var beforeMates = EnumerateMateFeatureNames(swModel);
+
                 Mate2 mate = swAssy.AddMate5(
-                    (int)swMateType_e.swMateCOORDINATE,        // 20
-                    (int)swMateAlign_e.swMateAlignALIGNED,     // 0 (aligned)
-                    false,                                     // Flip
-                    0,                                         // Distance
-                    0.001, 0.001,                              // DistanceAbsMin, DistanceAbsMax
-                    0.001, 0.001,                              // GearRatioNumerator, GearRatioDenominator
-                    0.5235987755983,                           // Angle (30 deg in radians)
-                    0.5235987755983, 0.5235987755983,          // AngleAbsMin, AngleAbsMax
-                    false,                                     // ForPositioningOnly
-                    false,                                     // LockRotation
-                    0,                                         // WidthMateOption
+                    (int)swMateType_e.swMateCOORDINATE,
+                    (int)swMateAlign_e.swMateAlignALIGNED,
+                    false,
+                    0,
+                    0.001, 0.001,
+                    0.001, 0.001,
+                    0.5235987755983,
+                    0.5235987755983, 0.5235987755983,
+                    false,
+                    false,
+                    0,
                     out int mateError
                 );
 
-                if (mate != null && mateError == 0)
+                // AddMate5 sometimes returns a non-zero error code (commonly 1 =
+                // "IncorrectSelections") even when the mate was successfully created.
+                // Trust the tree state, not the error code: diff the MateGroup before
+                // and after the call to find the new mate. Only fail if we can't
+                // locate a new mate AND the API call reported an error.
+                Feature mateFeature = FindNewMateFeature(swModel, beforeMates);
+
+                // Fallback: first-mate edge case (no MateGroup before AddMate5)
+                if (mateFeature == null)
                 {
-                    Feature mateFeature = (Feature)swModel.FeatureByPositionReverse(0);
+                    SelectionMgr selMgr = swModel.SelectionManager as SelectionMgr;
+                    if (selMgr != null && selMgr.GetSelectedObjectCount2(-1) > 0)
+                        mateFeature = selMgr.GetSelectedObject6(1, -1) as Feature;
+                }
 
-                    if (mateFeature != null)
+                swModel.ClearSelection2(true);
+
+                if (mateFeature == null)
+                {
+                    // No new mate feature AND no selection → genuinely failed
+                    Console.WriteLine($"Warning: AddMate5 failed for '{poseCoordName}' (error {mateError}, no new mate found)");
+                    return null;
+                }
+
+                if (mateError != 0)
+                {
+                    // Mate exists in the tree despite the error code — log but continue
+                    Console.WriteLine($"Note: AddMate5 returned error {mateError} but mate was created for '{poseCoordName}'");
+                }
+
+                Console.WriteLine($"Located new mate: '{mateFeature.Name}' (type {mateFeature.GetTypeName2()})");
+
+                try { mateFeature.Name = poseCoordName; }
+                catch (Exception ex)
+                { Console.WriteLine($"Warning: Could not rename mate: {ex.Message}"); }
+
+                bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
+                if (axisAligned)
+                    Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
+
+                ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(swModel, mateFeature, activeConfigName);
+                return mateFeature;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to mate '{comp.Name2}' to '{poseCoordName}': {ex.Message}");
+                try { swModel.ClearSelection2(true); } catch { }
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Fallback selection for a coordinate system inside a virtual-part component.
+        /// Walks the component's model doc feature tree to locate the CSys by name,
+        /// then calls Select2 on it with selection mark 2 (for the second mate entity).
+        /// </summary>
+        private static bool TrySelectComponentCoordSystem(
+            ModelDoc2 swModel, Component2 comp, string csName)
+        {
+            if (comp == null || string.IsNullOrWhiteSpace(csName))
+                return false;
+
+            try
+            {
+                ModelDoc2 compDoc = comp.GetModelDoc2() as ModelDoc2;
+                if (compDoc == null)
+                {
+                    Console.WriteLine($"  Fallback: component '{comp.Name2}' has no model doc");
+                    return false;
+                }
+
+                Feature feat = (Feature)compDoc.FirstFeature();
+                while (feat != null)
+                {
+                    if (feat.GetTypeName2() == "CoordSys" &&
+                        string.Equals(feat.Name, csName, StringComparison.OrdinalIgnoreCase))
                     {
-                        // Rename mate to include the pose name so it can be found/deleted later.
-                        // poseCoordName is already "{poseName} {hardpointName}".
-                        try { mateFeature.Name = poseCoordName; }
-                        catch (Exception ex)
-                        { Console.WriteLine($"Warning: Could not rename mate: {ex.Message}"); }
-
-                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
-                        if (axisAligned)
-                        {
-                            Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
-                        }
-
-                        ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(swModel, mateFeature, activeConfigName);
+                        bool ok = feat.Select2(true, 2);
+                        Console.WriteLine($"  Fallback select of '{csName}' in '{comp.Name2}': {ok}");
+                        return ok;
                     }
+                    feat = (Feature)feat.GetNextFeature();
+                }
+
+                Console.WriteLine($"  Fallback: CSys '{csName}' not found in '{comp.Name2}'");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  Fallback selection error for '{csName}': {ex.Message}");
+            }
+            return false;
+        }
+
+        /// <summary>Return a set of mate feature names currently inside the MateGroup.</summary>
+        private static HashSet<string> EnumerateMateFeatureNames(ModelDoc2 swModel)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            Feature mateGroup = FindMatesGroupFeature(swModel);
+            if (mateGroup == null) return names;
+
+            Feature sub = (Feature)mateGroup.GetFirstSubFeature();
+            while (sub != null)
+            {
+                if (!string.IsNullOrEmpty(sub.Name))
+                    names.Add(sub.Name);
+                sub = (Feature)sub.GetNextSubFeature();
+            }
+            return names;
+        }
+
+        /// <summary>
+        /// After AddMate5, diff the MateGroup against the snapshot to find the new mate.
+        /// If there is no MateGroup yet (first-mate edge case), returns null — caller
+        /// should fall back to the selection manager.
+        /// </summary>
+        private static Feature FindNewMateFeature(ModelDoc2 swModel, HashSet<string> beforeMates)
+        {
+            Feature mateGroup = FindMatesGroupFeature(swModel);
+            if (mateGroup == null) return null;
+
+            Feature sub = (Feature)mateGroup.GetFirstSubFeature();
+            while (sub != null)
+            {
+                if (!beforeMates.Contains(sub.Name))
+                    return sub;
+                sub = (Feature)sub.GetNextSubFeature();
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Create or populate a mate folder inside the MateGroup. Mates must be selected
+        /// inside the mate group context, so we select each by feature name with the
+        /// "MATE" object type hint.
+        /// </summary>
+        private static void InsertPoseCreateOrPopulateMatesFolder(ModelDoc2 swModel, List<Feature> mateFeatures, string folderName)
+        {
+            if (swModel == null || mateFeatures == null || mateFeatures.Count == 0 || string.IsNullOrWhiteSpace(folderName))
+                return;
+
+            try
+            {
+                FeatureManager featMgr = swModel.FeatureManager;
+                if (featMgr == null)
+                    return;
+
+                // Reuse existing folder if it exists — just move mates into it
+                Feature existingFolder = InsertPoseFindFolder(swModel, folderName);
+                if (existingFolder != null)
+                {
+                    foreach (Feature feat in mateFeatures)
+                    {
+                        if (feat != null)
+                            featMgr.MoveToFolder(folderName, feat.Name, false);
+                    }
+                    Console.WriteLine($"Added mates to existing folder '{folderName}'");
+                    return;
+                }
+
+                // Select each mate by name, then insert a containing folder
+                swModel.ClearSelection2(true);
+                int selectedCount = 0;
+                foreach (Feature feat in mateFeatures)
+                {
+                    if (feat == null) continue;
+                    bool selected = swModel.Extension.SelectByID2(
+                        feat.Name, "MATE", 0, 0, 0, true, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (selected) selectedCount++;
+                }
+
+                if (selectedCount == 0)
+                {
+                    swModel.ClearSelection2(true);
+                    Console.WriteLine($"Warning: Could not select any mates for folder '{folderName}'");
+                    return;
+                }
+
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                if (folder != null)
+                {
+                    folder.Name = folderName;
+                    Console.WriteLine($"Created mate folder '{folderName}' with {selectedCount} mate(s)");
                 }
 
                 swModel.ClearSelection2(true);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Failed to mate '{comp.Name2}' to '{poseCoordName}': {ex.Message}");
+                Console.WriteLine($"Warning: Failed to create/populate mate folder '{folderName}': {ex.Message}");
                 try { swModel.ClearSelection2(true); } catch { }
             }
         }
@@ -2323,7 +2528,7 @@ namespace sw_drawer
         /// </summary>
         private static readonly string[] ComponentFileNames = new[]
         {
-            "Chassis", "FL_Corner", "FR_Corner", "RL_Corner", "RR_Corner"
+            "Inboard", "FL_Corner", "FR_Corner", "RL_Corner", "RR_Corner"
         };
 
         /// <summary>Map file stem (e.g. "FL_Corner") to SolidWorks subassembly display name.</summary>
@@ -2354,8 +2559,8 @@ namespace sw_drawer
                 var hardpoints = new List<HardpointInfo>();
                 var jsonData = LoadJsonData(path);
 
-                if (fileStem == "Chassis")
-                    LoadChassisJson(jsonData, subassyName, hardpoints, rearReferenceOffsetMm);
+                if (fileStem == "Inboard")
+                    LoadInboardJson(jsonData, subassyName, hardpoints, rearReferenceOffsetMm);
                 else
                     LoadCornerJson(jsonData, fileStem, subassyName, hardpoints, rearReferenceOffsetMm);
 
@@ -2368,8 +2573,8 @@ namespace sw_drawer
             return groups;
         }
 
-        /// <summary>Load Chassis.json which has {Front: {...}, Rear: {...}} structure.</summary>
-        private static void LoadChassisJson(
+        /// <summary>Load Inboard.json which has {Front: {...}, Rear: {...}} structure.</summary>
+        private static void LoadInboardJson(
             Dictionary<string, object> jsonData,
             string subassyName,
             List<HardpointInfo> hardpoints,
@@ -3240,7 +3445,7 @@ namespace sw_drawer
             public double AngleX { get; set; }
             public double AngleY { get; set; }
             public double AngleZ { get; set; }
-            /// <summary>Target subassembly name (e.g. "Chassis", "FL Corner").</summary>
+            /// <summary>Target subassembly name (e.g. "Inboard", "FL Corner").</summary>
             public string TargetSubassembly { get; set; }
         }
 
