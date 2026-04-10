@@ -1124,6 +1124,259 @@ namespace sw_drawer
             }
         }
 
+        // =====================================================================
+        // Pose management: list and delete
+        // =====================================================================
+
+        /// <summary>
+        /// List all pose configurations by scanning for "{name} Transforms" folders.
+        /// Outputs one POSE:{name} line per pose for the caller to parse.
+        /// </summary>
+        public static bool RunListPoses(string[] args)
+        {
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null)
+            { Console.WriteLine("Error: No active document"); return false; }
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+            var poseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            CollectPoseNames(swModel, poseNames);
+
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components != null)
+            {
+                foreach (object obj in components)
+                {
+                    Component2 comp = obj as Component2;
+                    ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
+                    if (compDoc != null && compDoc.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
+                        CollectPoseNames(compDoc, poseNames);
+                }
+            }
+
+            foreach (string name in poseNames)
+                Console.WriteLine($"POSE:{name}");
+
+            Console.WriteLine($"Found {poseNames.Count} pose(s)");
+            return true;
+        }
+
+        private static void CollectPoseNames(ModelDoc2 swModel, HashSet<string> poseNames)
+        {
+            const string suffix = " Transforms";
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "FtrFolder" &&
+                    feat.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string poseName = feat.Name.Substring(0, feat.Name.Length - suffix.Length);
+                    if (!string.IsNullOrWhiteSpace(poseName))
+                        poseNames.Add(poseName);
+                }
+                feat = (Feature)feat.GetNextFeature();
+            }
+        }
+
+        /// <summary>
+        /// Delete a pose: remove its transforms folder, coordinate systems, mates,
+        /// and configuration from the top-level assembly and all subassemblies.
+        /// </summary>
+        public static bool RunDeletePose(string[] args)
+        {
+            if (args.Length < 3)
+            {
+                Console.WriteLine("Usage: hardpoints deletepose <poseName>");
+                return false;
+            }
+
+            string poseName = args[2];
+
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null)
+            { Console.WriteLine("Error: No active document"); return false; }
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+
+            // Switch away from the pose config before deleting it
+            string activeConfig = swModel.ConfigurationManager?.ActiveConfiguration?.Name ?? "";
+            if (string.Equals(activeConfig, poseName, StringComparison.OrdinalIgnoreCase))
+            {
+                string[] configs = swModel.GetConfigurationNames() as string[];
+                string fallback = "Default";
+                foreach (string c in configs ?? new string[0])
+                {
+                    if (!string.Equals(c, poseName, StringComparison.OrdinalIgnoreCase))
+                    { fallback = c; break; }
+                }
+                swModel.ShowConfiguration2(fallback);
+                Console.WriteLine($"Switched to configuration '{fallback}'");
+            }
+
+            int totalDeleted = 0;
+
+            // Delete from each subassembly
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components != null)
+            {
+                foreach (object obj in components)
+                {
+                    Component2 comp = obj as Component2;
+                    ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
+                    if (compDoc == null || compDoc.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+                        continue;
+
+                    string subTitle = compDoc.GetTitle();
+                    int activateErr = 0;
+                    swApp.ActivateDoc2(subTitle, false, ref activateErr);
+                    ModelDoc2 activeDoc = (ModelDoc2)swApp.ActiveDoc;
+
+                    totalDeleted += DeletePoseFromModel(activeDoc, poseName);
+
+                    activeDoc.Save3(
+                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
+                        ref activateErr, ref activateErr);
+                    swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErr);
+                }
+            }
+
+            // Delete from top-level
+            totalDeleted += DeletePoseFromModel(swModel, poseName);
+
+            // Delete configuration from hierarchy
+            DeleteConfigurationFromHierarchy(swAssy, swModel, poseName);
+
+            swModel.EditRebuild3();
+            Console.WriteLine($"Deleted pose '{poseName}': removed {totalDeleted} features");
+            return true;
+        }
+
+        private static int DeletePoseFromModel(ModelDoc2 swModel, string poseName)
+        {
+            if (swModel == null) return 0;
+
+            string folderName = $"{poseName} Transforms";
+            string posePrefix = $"{poseName} ";
+            int deleted = 0;
+
+            var toDelete = new List<Feature>();
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                string typeName = feat.GetTypeName2();
+                string name = feat.Name;
+
+                if (typeName == "FtrFolder" && string.Equals(name, folderName, StringComparison.OrdinalIgnoreCase))
+                    toDelete.Add(feat);
+                else if (typeName == "CoordSys" && name.StartsWith(posePrefix, StringComparison.OrdinalIgnoreCase))
+                    toDelete.Add(feat);
+
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            // Find mates belonging to this pose
+            Feature matesGroup = FindMatesGroupFeature(swModel);
+            if (matesGroup != null)
+            {
+                Feature subFeat = (Feature)matesGroup.GetFirstSubFeature();
+                while (subFeat != null)
+                {
+                    if (subFeat.Name.StartsWith(posePrefix, StringComparison.OrdinalIgnoreCase))
+                        toDelete.Add(subFeat);
+                    subFeat = (Feature)subFeat.GetNextSubFeature();
+                }
+            }
+
+            for (int i = toDelete.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    swModel.ClearSelection2(true);
+                    toDelete[i].Select2(false, 0);
+                    swModel.EditDelete();
+                    deleted++;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Could not delete '{toDelete[i].Name}': {ex.Message}");
+                }
+            }
+
+            if (deleted > 0)
+                Console.WriteLine($"Deleted {deleted} features from {swModel.GetTitle()}");
+            return deleted;
+        }
+
+        private static Feature FindMatesGroupFeature(ModelDoc2 swModel)
+        {
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "MateGroup")
+                    return feat;
+                feat = (Feature)feat.GetNextFeature();
+            }
+            return null;
+        }
+
+        private static void DeleteConfigurationFromHierarchy(
+            AssemblyDoc swAssy, ModelDoc2 swModel, string configName)
+        {
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components != null)
+            {
+                foreach (object obj in components)
+                {
+                    Component2 comp = obj as Component2;
+                    ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
+                    if (compDoc != null)
+                        DeleteConfigurationIfExists(compDoc, configName);
+                }
+            }
+            DeleteConfigurationIfExists(swModel, configName);
+        }
+
+        private static void DeleteConfigurationIfExists(ModelDoc2 swModel, string configName)
+        {
+            string[] configs = swModel.GetConfigurationNames() as string[];
+            if (configs == null) return;
+
+            foreach (string c in configs)
+            {
+                if (!string.Equals(c, configName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string active = swModel.ConfigurationManager?.ActiveConfiguration?.Name ?? "";
+                if (string.Equals(active, configName, StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (string other in configs)
+                    {
+                        if (!string.Equals(other, configName, StringComparison.OrdinalIgnoreCase))
+                        { swModel.ShowConfiguration2(other); break; }
+                    }
+                }
+
+                bool deleted = swModel.DeleteConfiguration2(configName);
+                Console.WriteLine(deleted
+                    ? $"Deleted configuration '{configName}' from {swModel.GetTitle()}"
+                    : $"Warning: Could not delete configuration '{configName}' from {swModel.GetTitle()}");
+                return;
+            }
+        }
+
 
 
         private static Component2 InsertPoseFindComponentByHardpointName(List<Component2> components, string hardpointName)
@@ -1414,9 +1667,14 @@ namespace sw_drawer
                 {
                     Feature mateFeature = (Feature)swModel.FeatureByPositionReverse(0);
 
-                    // Scope mate to active configuration only (best effort).
                     if (mateFeature != null)
                     {
+                        // Rename mate to include the pose name so it can be found/deleted later.
+                        // poseCoordName is already "{poseName} {hardpointName}".
+                        try { mateFeature.Name = poseCoordName; }
+                        catch (Exception ex)
+                        { Console.WriteLine($"Warning: Could not rename mate: {ex.Message}"); }
+
                         bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
                         if (axisAligned)
                         {

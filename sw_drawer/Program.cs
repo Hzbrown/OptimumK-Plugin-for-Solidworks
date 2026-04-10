@@ -86,6 +86,18 @@ namespace sw_drawer
                                 }
                                 success = HardpointRunner.RunAddWheels(args);
                                 break;
+                            case "listposes":
+                                success = HardpointRunner.RunListPoses(args);
+                                break;
+                            case "deletepose":
+                                if (args.Length < 3)
+                                {
+                                    Console.WriteLine("Usage: hardpoints deletepose <poseName>");
+                                    PrintUsage();
+                                    return 1;
+                                }
+                                success = HardpointRunner.RunDeletePose(args);
+                                break;
                             default:
                                 Console.WriteLine($"Unknown hardpoints command: {subCommand}");
                                 PrintUsage();

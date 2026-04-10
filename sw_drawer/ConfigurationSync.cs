@@ -47,8 +47,11 @@ namespace sw_drawer
         }
 
         /// <summary>
-        /// Create <paramref name="configName"/> in both the top-level assembly and every
-        /// direct subassembly.  Existing configurations with the same name are left untouched.
+        /// Create <paramref name="configName"/> in the top-level assembly and every direct
+        /// subassembly. If the config is newly created, every existing pose-scoped feature
+        /// (coordinate systems inside "* Transforms" folders, and mates named with a pose
+        /// prefix) is explicitly suppressed in it so future poses inherit suppression of
+        /// earlier poses' features without manual intervention.
         /// </summary>
         internal static void CreateConfigurationInHierarchy(
             AssemblyDoc swAssy, ModelDoc2 swModel, string configName)
@@ -56,7 +59,9 @@ namespace sw_drawer
             if (swModel == null || string.IsNullOrWhiteSpace(configName))
                 return;
 
-            GetOrCreateConfiguration(swModel, configName);
+            GetOrCreateConfiguration(swModel, configName, out bool wasNewTop);
+            if (wasNewTop)
+                SuppressExistingPoseFeaturesInConfig(swModel, configName);
 
             object[] components = swAssy?.GetComponents(false) as object[];
             if (components == null)
@@ -66,16 +71,22 @@ namespace sw_drawer
             {
                 Component2 comp = obj as Component2;
                 ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
-                if (compDoc != null && compDoc.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
-                    GetOrCreateConfiguration(compDoc, configName);
+                if (compDoc == null || compDoc.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+                    continue;
+
+                GetOrCreateConfiguration(compDoc, configName, out bool wasNewSub);
+                if (wasNewSub)
+                    SuppressExistingPoseFeaturesInConfig(compDoc, configName);
             }
         }
 
         /// <summary>
-        /// Make <paramref name="feat"/> unsuppressed in <paramref name="targetConfigName"/>
-        /// and suppressed in every other configuration of <paramref name="swModel"/>.
+        /// Scope <paramref name="feat"/> exclusively to <paramref name="targetConfigName"/>:
+        /// unsuppressed in the target, suppressed in every other currently-existing config.
+        /// Future configs will auto-inherit suppression if created via
+        /// <see cref="CreateConfigurationInHierarchy"/> after the feature exists.
         /// </summary>
-        internal static void ScopeFeatureToConfiguration(
+        internal static void ScopeFeatureExclusivelyToConfiguration(
             ModelDoc2 swModel, Feature feat, string targetConfigName)
         {
             if (swModel == null || feat == null || string.IsNullOrWhiteSpace(targetConfigName))
@@ -99,26 +110,112 @@ namespace sw_drawer
         }
 
         /// <summary>
-        /// Future-proof scoping: suppress <paramref name="feat"/> in ALL configurations
-        /// (including any created later), then unsuppress ONLY in <paramref name="targetConfigName"/>.
+        /// Find all features belonging to any existing pose in <paramref name="swModel"/>
+        /// and suppress them in <paramref name="newConfigName"/>. Pose features are:
+        ///   • CoordSys features whose owning folder ends with " Transforms"
+        ///   • Mate features whose name starts with "{poseName} " for any discovered pose
         /// </summary>
-        internal static void ScopeFeatureExclusivelyToConfiguration(
-            ModelDoc2 swModel, Feature feat, string targetConfigName)
+        private static void SuppressExistingPoseFeaturesInConfig(ModelDoc2 swModel, string newConfigName)
         {
-            if (swModel == null || feat == null || string.IsNullOrWhiteSpace(targetConfigName))
-                return;
+            if (swModel == null) return;
 
-            // Suppress in all configurations (covers future ones too)
-            feat.SetSuppression2(
-                (int)swFeatureSuppressionAction_e.swSuppressFeature,
-                (int)swInConfigurationOpts_e.swAllConfiguration,
-                null);
+            const string folderSuffix = " Transforms";
+            string[] onlyNew = new string[] { newConfigName };
 
-            // Unsuppress only in the target configuration
-            feat.SetSuppression2(
-                (int)swFeatureSuppressionAction_e.swUnSuppressFeature,
-                (int)swInConfigurationOpts_e.swSpecifyConfiguration,
-                new string[] { targetConfigName });
+            // Collect pose names from existing "* Transforms" folders
+            var poseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var poseFeatures = new List<Feature>();
+
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                string typeName = feat.GetTypeName2();
+                string name = feat.Name;
+
+                if (typeName == "FtrFolder" && name.EndsWith(folderSuffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string poseName = name.Substring(0, name.Length - folderSuffix.Length);
+                    if (!string.IsNullOrWhiteSpace(poseName))
+                    {
+                        poseNames.Add(poseName);
+                        poseFeatures.Add(feat);
+                    }
+                }
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            // Second pass: CoordSys features whose name starts with a known pose prefix
+            // (coordinate systems may live inside folders; also catch any that escaped)
+            feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                string typeName = feat.GetTypeName2();
+                string name = feat.Name;
+
+                if (typeName == "CoordSys")
+                {
+                    foreach (string poseName in poseNames)
+                    {
+                        if (name.StartsWith(poseName + " ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            poseFeatures.Add(feat);
+                            break;
+                        }
+                    }
+                }
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            // Third pass: mates inside the MateGroup whose name matches a pose prefix
+            Feature mateGroup = FindMateGroup(swModel);
+            if (mateGroup != null)
+            {
+                Feature subFeat = (Feature)mateGroup.GetFirstSubFeature();
+                while (subFeat != null)
+                {
+                    foreach (string poseName in poseNames)
+                    {
+                        if (subFeat.Name.StartsWith(poseName + " ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            poseFeatures.Add(subFeat);
+                            break;
+                        }
+                    }
+                    subFeat = (Feature)subFeat.GetNextSubFeature();
+                }
+            }
+
+            // Suppress all collected pose features in the newly-created config
+            foreach (Feature poseFeat in poseFeatures)
+            {
+                try
+                {
+                    poseFeat.SetSuppression2(
+                        (int)swFeatureSuppressionAction_e.swSuppressFeature,
+                        (int)swInConfigurationOpts_e.swSpecifyConfiguration,
+                        onlyNew);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"ConfigSync: Warning – could not suppress '{poseFeat.Name}' in '{newConfigName}': {ex.Message}");
+                }
+            }
+
+            if (poseFeatures.Count > 0)
+                Console.WriteLine($"ConfigSync: Suppressed {poseFeatures.Count} existing pose features in new config '{newConfigName}'");
+        }
+
+        /// <summary>Find the MateGroup feature in a model (assembly).</summary>
+        private static Feature FindMateGroup(ModelDoc2 swModel)
+        {
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "MateGroup")
+                    return feat;
+                feat = (Feature)feat.GetNextFeature();
+            }
+            return null;
         }
 
         /// <summary>
@@ -126,8 +223,19 @@ namespace sw_drawer
         /// </summary>
         internal static Configuration GetOrCreateConfiguration(ModelDoc2 swModel, string configName)
         {
+            GetOrCreateConfiguration(swModel, configName, out _);
+            return swModel?.GetConfigurationByName(configName) as Configuration;
+        }
+
+        /// <summary>
+        /// Return true if the config exists or was created.  <paramref name="wasCreated"/>
+        /// reports whether a new configuration was added (vs reusing an existing one).
+        /// </summary>
+        private static bool GetOrCreateConfiguration(ModelDoc2 swModel, string configName, out bool wasCreated)
+        {
+            wasCreated = false;
             if (swModel == null || string.IsNullOrWhiteSpace(configName))
-                return null;
+                return false;
 
             string[] existing = swModel.GetConfigurationNames() as string[];
             if (existing != null)
@@ -135,27 +243,26 @@ namespace sw_drawer
                 foreach (string name in existing)
                 {
                     if (string.Equals(name, configName, StringComparison.OrdinalIgnoreCase))
-                        return swModel.GetConfigurationByName(configName) as Configuration;
+                        return true;
                 }
             }
 
-            // Derive from the active configuration so properties are inherited
-            Configuration active = swModel.ConfigurationManager?.ActiveConfiguration;
-            string parentName = active?.Name ?? "";
-
             Configuration newCfg = swModel.AddConfiguration3(
                 configName,
-                "",   // comment
-                "",   // alternate name
+                "",
+                "",
                 (int)swConfigurationOptions2_e.swConfigOption_DontActivate
             ) as Configuration;
 
             if (newCfg != null)
+            {
+                wasCreated = true;
                 Console.WriteLine($"ConfigSync: Created configuration '{configName}' in {swModel.GetTitle()}");
-            else
-                Console.WriteLine($"ConfigSync: Warning – failed to create '{configName}' in {swModel.GetTitle()}");
+                return true;
+            }
 
-            return newCfg;
+            Console.WriteLine($"ConfigSync: Warning – failed to create '{configName}' in {swModel.GetTitle()}");
+            return false;
         }
     }
 }

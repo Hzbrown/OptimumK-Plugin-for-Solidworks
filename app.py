@@ -6,7 +6,8 @@ import shutil
 import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
-                             QProgressBar, QGroupBox, QGridLayout, QCheckBox, QLineEdit, QSpinBox)
+                             QProgressBar, QGroupBox, QGridLayout, QCheckBox, QLineEdit, QSpinBox,
+                             QListWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
@@ -1599,8 +1600,28 @@ class PoseCreationTab(QWidget):
 
         group_run.setLayout(h_run)
         layout.addWidget(group_run)
-        
-        
+
+        # Pose Manager
+        group_manage = QGroupBox("Manage Poses")
+        v_manage = QVBoxLayout()
+
+        self.pose_list = QListWidget()
+        self.pose_list.setMaximumHeight(120)
+        v_manage.addWidget(self.pose_list)
+
+        h_manage_btns = QHBoxLayout()
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.clicked.connect(self.refresh_poses)
+        h_manage_btns.addWidget(btn_refresh)
+
+        self.btn_delete_pose = QPushButton("Delete Selected")
+        self.btn_delete_pose.clicked.connect(self.delete_selected_pose)
+        h_manage_btns.addWidget(self.btn_delete_pose)
+        v_manage.addLayout(h_manage_btns)
+
+        group_manage.setLayout(v_manage)
+        layout.addWidget(group_manage)
+
         # Console output
         layout.addWidget(QLabel("Output:"))
         self.status_text = QTextEdit()
@@ -1621,6 +1642,7 @@ class PoseCreationTab(QWidget):
     def set_buttons_enabled(self, enabled):
         """Enable or disable all action buttons."""
         self.btn_create_pose.setEnabled(enabled)
+        self.btn_delete_pose.setEnabled(enabled)
     
     def on_progress(self, current, total):
         """Update progress bar with current/total values."""
@@ -1660,13 +1682,86 @@ class PoseCreationTab(QWidget):
         self.worker = None
         if success:
             self.status_text.append(f"✓ {message}")
-            self.refresh_poses()
         else:
             self.status_text.append(f"✗ {message}")
-    
+
     def append_log(self, text):
         """Append text to log."""
         self.status_text.append(text)
+
+    def _get_exe(self):
+        """Get the SuspensionTools executable path."""
+        from pose_creation import get_suspension_tools_exe
+        return get_suspension_tools_exe()
+
+    def refresh_poses(self):
+        """Query SolidWorks for existing poses and populate the list."""
+        self.pose_list.clear()
+        try:
+            exe = self._get_exe()
+            result = subprocess.run(
+                [exe, "hardpoints", "listposes"],
+                capture_output=True, text=True, timeout=15)
+            for line in result.stdout.splitlines():
+                if line.startswith("POSE:"):
+                    self.pose_list.addItem(line[5:])
+            self.status_text.append(f"✓ Found {self.pose_list.count()} pose(s)")
+        except Exception as e:
+            self.status_text.append(f"✗ Could not list poses: {e}")
+
+    def delete_selected_pose(self):
+        """Delete the selected pose from SolidWorks."""
+        item = self.pose_list.currentItem()
+        if not item:
+            QMessageBox.warning(self, "No Selection", "Select a pose to delete.")
+            return
+
+        pose_name = item.text()
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Delete pose '{pose_name}'?\n\nThis removes its configuration, coordinate systems, and mates.",
+            QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        self.start_loading(f"Deleting pose '{pose_name}'...")
+        try:
+            exe = self._get_exe()
+            cmd = [exe, "hardpoints", "deletepose", pose_name]
+
+            self.worker = HardpointWorker(self._run_pose_command, cmd)
+            self.worker.log.connect(self.append_log)
+            self.worker.progress.connect(self.on_progress)
+            self.worker.state_changed.connect(self.on_state_changed)
+            self.worker.finished.connect(self._on_delete_finished)
+            self.worker.start()
+        except Exception as e:
+            self.stop_loading(False, str(e))
+
+    def _run_pose_command(self, cmd, worker=None):
+        """Run a subprocess command."""
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            universal_newlines=True, bufsize=1)
+        if worker:
+            worker._process = process
+        for line in iter(process.stdout.readline, ''):
+            if worker and worker._abort:
+                process.terminate()
+                return False
+            line = line.strip()
+            if line and worker:
+                worker.log.emit(line)
+        process.wait()
+        if process.returncode != 0:
+            raise Exception(f"Command failed with exit code {process.returncode}")
+        return True
+
+    def _on_delete_finished(self, success, message):
+        """Handle delete completion — refresh the list."""
+        self.stop_loading(success, message)
+        if success:
+            self.refresh_poses()
 
     def test_solidworks_connection(self):
         """Test SolidWorks connection and print active assembly/configuration."""
@@ -1677,19 +1772,19 @@ class PoseCreationTab(QWidget):
             self.status_text.append(f"✓ Active configuration: {config_name}")
         except Exception as e:
             self.status_text.append(f"✗ Connection failed: {str(e)}")
-    
+
     def abort_operation(self):
         """Abort the current operation."""
         if self.worker:
             self.status_text.append("Aborting operation...")
             self.worker.abort()
-    
+
     def browse_json_file(self):
         """Browse for JSON file."""
         file_path = QFileDialog.getOpenFileName(self, "Select JSON File", filter="*.json")[0]
         if file_path:
             self.json_path.setText(file_path)
-    
+
     def create_pose(self):
         """Insert pose using component JSON files from the project folder."""
         project_path = get_project_path(self)
