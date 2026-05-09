@@ -52,7 +52,7 @@ namespace sw_drawer
                             case "add":
                                 if (args.Length < 4)
                                 {
-                                    Console.WriteLine("Usage: hardpoints add <jsonPath> <markerPartPath>");
+                                    Console.WriteLine("Usage: hardpoints add <jsonDir> <markerPartPath>");
                                     PrintUsage();
                                     return 1;
                                 }
@@ -61,7 +61,7 @@ namespace sw_drawer
                             case "pose":
                                 if (args.Length < 4)
                                 {
-                                    Console.WriteLine("Usage: hardpoints pose <jsonPath> <configName>");
+                                    Console.WriteLine("Usage: hardpoints pose <jsonDir> <configName>");
                                     PrintUsage();
                                     return 1;
                                 }
@@ -70,7 +70,7 @@ namespace sw_drawer
                             case "insertpose":
                                 if (args.Length < 4)
                                 {
-                                    Console.WriteLine("Usage: hardpoints insertpose <jsonPath> <poseName>");
+                                    Console.WriteLine("Usage: hardpoints insertpose <jsonDir> <poseName>");
                                     PrintUsage();
                                     return 1;
                                 }
@@ -84,6 +84,18 @@ namespace sw_drawer
                                     return 1;
                                 }
                                 success = HardpointRunner.RunAddWheels(args);
+                                break;
+                            case "listposes":
+                                success = HardpointRunner.RunListPoses(args);
+                                break;
+                            case "deletepose":
+                                if (args.Length < 3)
+                                {
+                                    Console.WriteLine("Usage: hardpoints deletepose <poseName>");
+                                    PrintUsage();
+                                    return 1;
+                                }
+                                success = HardpointRunner.RunDeletePose(args);
                                 break;
                             default:
                                 Console.WriteLine($"Unknown hardpoints command: {subCommand}");

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:doc-0g-84-sheets.googleusercontent.com)",
+      "mcp__c1fc4002-5f49-5f9d-a4e5-93c4ef5d6a75__google_drive_fetch"
+    ]
+  }
+}

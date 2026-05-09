@@ -114,13 +114,11 @@ class OptimumSheetParser:
             y_r = f(row[right_y_idx]) if right_y_idx is not None and right_y_idx < len(row) else y_l
             z_r = f(row[right_z_idx]) if right_z_idx is not None and right_z_idx < len(row) else z_l
 
-            # Keep your "None -> 0" behavior:
-            points[f"{name}_L"] = [x_l if x_l is not None else 0.0,
-                                  y_l if y_l is not None else 0.0,
-                                  z_l if z_l is not None else 0.0]
-            points[f"{name}_R"] = [x_r if x_r is not None else 0.0,
-                                  y_r if y_r is not None else 0.0,
-                                  z_r if z_r is not None else 0.0]
+            # Drop points where all coordinates are missing (non-numeric cells)
+            if x_l is not None or y_l is not None or z_l is not None:
+                points[f"{name}_L"] = [x_l or 0.0, y_l or 0.0, z_l or 0.0]
+            if x_r is not None or y_r is not None or z_r is not None:
+                points[f"{name}_R"] = [x_r or 0.0, y_r or 0.0, z_r or 0.0]
 
         return points
 
@@ -222,6 +220,118 @@ class OptimumSheetParser:
                             return {"Reference distance": val}
         return {"Reference distance": None}
 
+    # Prefixes that belong to the Inboard subassembly (chassis-mounted pickup points)
+    INBOARD_PREFIXES = ("CHAS_",)
+    # Prefixes that belong to Corner subassemblies
+    CORNER_PREFIXES = ("UPRI_", "NSMA_", "ROCK_")
+
+    def save_json_by_component(self, results_dir: str = "temp"):
+        """
+        Save parsed data as 5 component-based JSON files matching the SolidWorks
+        subassembly structure: Inboard, FL_Corner, FR_Corner, RL_Corner, RR_Corner.
+        Also saves Vehicle_Setup.json for reference distance.
+        """
+        base_dir = pathlib.Path(results_dir)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        parsed = self.parse()
+
+        inboard = {"Front": {}, "Rear": {}}
+        corners = {
+            "FL_Corner": {},
+            "FR_Corner": {},
+            "RL_Corner": {},
+            "RR_Corner": {},
+        }
+
+        for sheet_name, sheet_data in parsed.items():
+            if "setup" in sheet_name.lower():
+                continue
+            axle = self._detect_axle(sheet_name)
+            if axle is None:
+                continue
+
+            for block_name, block_data in sheet_data.items():
+                if block_name == "Wheels":
+                    self._distribute_wheels(block_data, axle, corners)
+                else:
+                    self._distribute_points(block_data, axle, inboard, corners)
+
+        # Write Inboard.json
+        self._write_json(base_dir / "Inboard.json", inboard)
+
+        # Write corner files
+        for corner_name, corner_data in corners.items():
+            self._write_json(base_dir / f"{corner_name}.json", corner_data)
+
+        # Also save reference distance
+        self.save_reference_distance(results_dir)
+
+        file_count = 1 + len(corners)  # Inboard + 4 corners
+        print(f"Saved {file_count} component files + Vehicle_Setup.json to {base_dir}")
+
+    @staticmethod
+    def _detect_axle(sheet_name: str) -> str | None:
+        """Return 'Front' or 'Rear' based on sheet name, or None if unrecognized."""
+        lower = sheet_name.lower()
+        if "front" in lower:
+            return "Front"
+        if "rear" in lower:
+            return "Rear"
+        return None
+
+    def _distribute_points(self, block_data: dict, axle: str,
+                           inboard: dict, corners: dict):
+        """Sort hardpoints from a block into Inboard or the correct Corner."""
+        if not isinstance(block_data, dict):
+            return
+        for point_name, coords in block_data.items():
+            if not isinstance(coords, list):
+                continue
+            if self._is_inboard_point(point_name):
+                inboard[axle][point_name] = coords
+            else:
+                corner_key = self._resolve_corner(point_name, axle)
+                if corner_key:
+                    corners[corner_key][point_name] = coords
+
+    def _distribute_wheels(self, wheels_data: dict, axle: str, corners: dict):
+        """Split wheel parameters by left/right into the appropriate corners."""
+        if not isinstance(wheels_data, dict):
+            return
+        prefix = "F" if axle == "Front" else "R"
+        left_key = f"{prefix}L_Corner"
+        right_key = f"{prefix}R_Corner"
+
+        left_wheels = {}
+        right_wheels = {}
+        for param_name, sides in wheels_data.items():
+            if isinstance(sides, dict):
+                left_wheels[param_name] = sides.get("left")
+                right_wheels[param_name] = sides.get("right")
+
+        if left_wheels:
+            corners[left_key]["Wheels"] = left_wheels
+        if right_wheels:
+            corners[right_key]["Wheels"] = right_wheels
+
+    def _is_inboard_point(self, point_name: str) -> bool:
+        return any(point_name.startswith(p) for p in self.INBOARD_PREFIXES)
+
+    @staticmethod
+    def _resolve_corner(point_name: str, axle: str) -> str | None:
+        """Map a corner-type point to its corner key (e.g. 'FL_Corner')."""
+        prefix = "F" if axle == "Front" else "R"
+        if point_name.endswith("_L"):
+            return f"{prefix}L_Corner"
+        if point_name.endswith("_R"):
+            return f"{prefix}R_Corner"
+        return None
+
+    @staticmethod
+    def _write_json(path: pathlib.Path, data: dict):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+
     def save_reference_distance(self, results_dir: str = "results"):
         """
         Save the parsed reference distance to a JSON file directly in the results directory.
@@ -238,5 +348,4 @@ class OptimumSheetParser:
 
 if __name__ == "__main__":
     parser = OptimumSheetParser(r"C:\Users\harri\OneDrive\Desktop\OptimumK SolidWorks Bridge\Final EV2024.xlsx")
-    parser.save_reference_distance("results")
-    parser.save_json_per_sheet("results")
+    parser.save_json_by_component("results")

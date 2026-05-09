@@ -11,6 +11,17 @@ namespace sw_drawer
 {
     public class HardpointRunner
     {
+        // Color mapping based on actual JSON name prefixes (RGB values 0-255)
+        private static readonly Dictionary<string, int[]> ColorMap = new Dictionary<string, int[]>
+        {
+            { "TIER_", new[] { 255, 165, 0 } },      // Orange - Tie Rod (high priority token)
+            { "CHAS_", new[] { 255, 0, 0 } },       // Red - Chassis
+            { "wheel", new[] { 0, 255, 0 } },       // Green - Wheels
+            { "UPRI_", new[] { 0, 0, 255 } },       // Blue - Upright
+        };
+
+        private static readonly int[] TieRodColor = new[] { 255, 165, 0 }; // Orange
+        private static readonly int[] DefaultColor = new[] { 128, 0, 128 }; // Purple for other components
 
         private static void ReportState(HardpointState state)
         {
@@ -26,174 +37,167 @@ namespace sw_drawer
         {
             if (args.Length < 4)
             {
-                Console.WriteLine("Usage: hardpoints add <jsonPath> <markerPartPath>");
+                Console.WriteLine("Usage: hardpoints add <jsonDir> <markerPartPath>");
                 return false;
             }
 
-            string jsonPath = args[2];
+            string jsonDir = args[2];
             string markerPartPath = args[3];
 
             ReportState(HardpointState.Initializing);
-            
+
             SldWorks swApp;
-            try
-            {
-                swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
-            }
-            catch
-            {
-                Console.WriteLine("Error: SolidWorks is not running");
-                return false;
-            }
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
 
             ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
             if (swModel == null)
-            {
-                Console.WriteLine("Error: No active document");
-                return false;
-            }
-
+            { Console.WriteLine("Error: No active document"); return false; }
             if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
-            {
-                Console.WriteLine("Error: Active document must be an assembly");
-                return false;
-            }
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
 
             AssemblyDoc swAssy = (AssemblyDoc)swModel;
 
-            // Validate marker file exists
             if (!File.Exists(markerPartPath))
-            {
-                Console.WriteLine($"Error: Marker part not found at {markerPartPath}");
-                return false;
-            }
+            { Console.WriteLine($"Error: Marker part not found at {markerPartPath}"); return false; }
 
             try
             {
-                // Load JSON data from both Front and Rear suspension files
+                // Load component JSON files (5-file format)
                 ReportState(HardpointState.LoadingJson);
-                
-                string frontJsonPath = Path.Combine(Path.GetDirectoryName(jsonPath), "Front_Suspension.json");
-                string rearJsonPath = Path.Combine(Path.GetDirectoryName(jsonPath), "Rear_Suspension.json");
-                double rearReferenceOffsetMm = LoadRearReferenceOffsetMm(Path.GetDirectoryName(jsonPath));
-                
-                var hardpoints = new List<HardpointInfo>();
-                
-                // Load front suspension
-                if (File.Exists(frontJsonPath))
-                {
-                    var frontData = LoadJsonData(frontJsonPath);
-                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints, 0.0);
-                    // Also extract wheels from front suspension
-                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints, false, 0.0);
-                    Console.WriteLine($"Loaded {hardpoints.Count} hardpoints from Front_Suspension.json");
-                }
-                
-                // Load rear suspension
-                int frontCount = hardpoints.Count;
-                if (File.Exists(rearJsonPath))
-                {
-                    var rearData = LoadJsonData(rearJsonPath);
-                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints, rearReferenceOffsetMm);
-                    // Also extract wheels from rear suspension
-                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints, true, rearReferenceOffsetMm);
-                    Console.WriteLine($"Loaded {hardpoints.Count - frontCount} hardpoints from Rear_Suspension.json");
-                }
-                
-                if (hardpoints.Count == 0)
-                {
-                    Console.WriteLine("Error: No hardpoints found in JSON files");
-                    return false;
-                }
-                
-                // Precompute total steps (insert + make virtual + rename + float + rename CS + color + folder + rebuild)
-                int totalSteps = hardpoints.Count * 6 + 2;
+                double rearOffsetMm = LoadRearReferenceOffsetMm(jsonDir);
+                var componentGroups = LoadComponentJsonFiles(jsonDir, rearOffsetMm);
+
+                int totalHardpoints = 0;
+                foreach (var group in componentGroups)
+                    totalHardpoints += group.Value.Count;
+
+                if (totalHardpoints == 0)
+                { Console.WriteLine("Error: No hardpoints found in component JSON files"); return false; }
+
+                // 6 steps per hardpoint + 1 rebuild per subassembly group + 1 final rebuild
+                int totalSteps = totalHardpoints * 6 + componentGroups.Count + 1;
                 Console.WriteLine($"TOTAL:{totalSteps}");
                 int progressCount = 0;
 
                 // Load marker part
                 ReportState(HardpointState.LoadingMarkerPart);
                 ModelDoc2 markerDoc = LoadMarkerPart(swApp, markerPartPath);
-                if (markerDoc == null)
-                {
-                    return false;
-                }
+                if (markerDoc == null) return false;
 
                 int activateErrors = 0;
                 swApp.ActivateDoc2(swModel.GetTitle(), false, ref activateErrors);
                 swModel = (ModelDoc2)swApp.ActiveDoc;
                 swAssy = (AssemblyDoc)swModel;
 
-                // Start insertion process
-                swModel.ClearSelection2(true);
-                swAssy.EditAssembly();
+                // Sync all subassemblies to Static configuration
+                ConfigurationSync.SyncSubassemblyConfigurations(swAssy, "Static");
 
-                var insertedParts = new List<VirtualPartInfo>();
-                
-                // Insert all components and immediately process each one
+                int totalInserted = 0;
+
+                // Process each subassembly group
                 ReportState(HardpointState.InsertingBodies);
-                foreach (var hardpoint in hardpoints)
+                foreach (var group in componentGroups)
                 {
-                    // Step 1: Insert component
-                    var partInfo = InsertVirtualMarkerPart(swAssy, markerDoc, hardpoint);
-                    if (partInfo != null)
-                    {
-                        progressCount++;
-                        ReportProgress(progressCount);
-                        
-                        // Step 2: Make virtual immediately
-                        MakeComponentVirtual(partInfo);
-                        progressCount++;
-                        ReportProgress(progressCount);
-                        
-                        // Step 3: Rename immediately
-                        RenameVirtualPart(swAssy, partInfo);
-                        progressCount++;
-                        ReportProgress(progressCount);
-                        
-                        // Step 4: Float the component in the assembly (unfix)
-                        FloatComponent(swAssy, swModel, partInfo);
-                        progressCount++;
-                        ReportProgress(progressCount);
+                    string subassyName = group.Key;
+                    List<HardpointInfo> hardpoints = group.Value;
 
-                        // Step 5: Rename internal coordinate system using EditPart2.
-                        // For wheels, also apply camber/toe orientation to the internal CS.
+                    Console.WriteLine($"Processing subassembly: {subassyName} ({hardpoints.Count} hardpoints)");
+
+                    // Find the target subassembly component
+                    Component2 subassyComp = FindSubassemblyByName(swAssy, subassyName);
+                    if (subassyComp == null)
+                    {
+                        Console.WriteLine($"Warning: Subassembly '{subassyName}' not found, skipping {hardpoints.Count} hardpoints");
+                        progressCount += hardpoints.Count * 6 + 1;
+                        ReportProgress(progressCount);
+                        continue;
+                    }
+
+                    // In-context edit: select the subassembly at top level and call
+                    // EditAssembly(). This is a selection-state toggle — with a
+                    // component selected, it ENTERS that subassembly's edit context.
+                    // Matches the VBA pattern: SelectByID2 + Part.EditAssembly.
+                    string assyTitle = swModel.GetTitle();
+                    string compFullName = $"{subassyComp.Name2}@{assyTitle}";
+                    swModel.ClearSelection2(true);
+                    bool selected = swModel.Extension.SelectByID2(
+                        compFullName, "COMPONENT", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (!selected)
+                    {
+                        Console.WriteLine($"Warning: Could not select '{compFullName}' for edit context");
+                        progressCount += hardpoints.Count * 6 + 1;
+                        ReportProgress(progressCount);
+                        continue;
+                    }
+                    swAssy.EditAssembly();
+                    Console.WriteLine($"Entered in-context edit for '{subassyComp.Name2}'");
+
+                    // Get the subassembly's underlying ModelDoc2 for feature-tree ops
+                    // (folder creation walks this model's features). The edit context
+                    // is acting on this same model.
+                    ModelDoc2 subassyModel = subassyComp.GetModelDoc2() as ModelDoc2;
+
+                    var insertedParts = new List<VirtualPartInfo>();
+
+                    foreach (var hardpoint in hardpoints)
+                    {
+                        // Top-level swAssy routes the insert into the active edit context
+                        var partInfo = InsertVirtualMarkerPart(swAssy, markerDoc, hardpoint);
+                        if (partInfo == null) continue;
+
+                        // Diagnostic on first iteration only: verify the new component
+                        // landed inside the subassembly, not at the top level
+                        if (insertedParts.Count == 0)
+                        {
+                            Component2 parentComp = partInfo.Component.GetParent() as Component2;
+                            string parentName = parentComp != null ? parentComp.Name2 : "<top level>";
+                            Console.WriteLine($"  First inserted part parent: {parentName}");
+                        }
+
+                        progressCount++; ReportProgress(progressCount);
+
+                        MakeComponentVirtual(partInfo);
+                        progressCount++; ReportProgress(progressCount);
+
+                        RenameVirtualPart(swAssy, partInfo);
+                        progressCount++; ReportProgress(progressCount);
+
+                        FloatComponent(swAssy, swModel, partInfo);
+                        progressCount++; ReportProgress(progressCount);
+
                         if (IsWheelHardpoint(partInfo.BaseName))
-                        {
                             RenameAndOrientWheelCoordinateSystem(swApp, swAssy, swModel, partInfo);
-                        }
                         else
-                        {
                             RenameInternalCoordinateSystem(swApp, swAssy, swModel, partInfo);
-                        }
-                        progressCount++;
-                        ReportProgress(progressCount);
-                        
-                        // Step 6: Apply color
+                        progressCount++; ReportProgress(progressCount);
+
                         ApplyColorToVirtualPart(swAssy, partInfo);
-                        progressCount++;
-                        ReportProgress(progressCount);
-                        
+                        progressCount++; ReportProgress(progressCount);
+
                         insertedParts.Add(partInfo);
                     }
+
+                    // Create folder inside the subassembly's feature tree
+                    ReportState(HardpointState.CreatingHardpointsFolder);
+                    if (insertedParts.Count > 0)
+                        CreateContainingFolderFromComponents(subassyModel ?? swModel, "Hardpoints", insertedParts);
+                    progressCount++; ReportProgress(progressCount);
+
+                    totalInserted += insertedParts.Count;
+
+                    // Exit back to the top-level assembly
+                    swModel.ClearSelection2(true);
+                    swAssy.EditAssembly();
                 }
 
-                // Step 6: Create folder and move all parts at once
-                ReportState(HardpointState.CreatingHardpointsFolder);
-                if (insertedParts.Count > 0)
-                {
-                    CreateContainingFolderFromComponents(swModel, "Hardpoints", insertedParts);
-                }
-                progressCount++;
-                ReportProgress(progressCount);
-
-                // Step 7: Rebuild
+                // Final rebuild
                 swModel.EditRebuild3();
-                progressCount++;
-                ReportProgress(progressCount);
+                progressCount++; ReportProgress(progressCount);
 
                 ReportState(HardpointState.Complete);
-                Console.WriteLine($"Successfully inserted {insertedParts.Count} virtual marker parts");
+                Console.WriteLine($"Successfully inserted {totalInserted} virtual marker parts across {componentGroups.Count} subassemblies");
                 return true;
             }
             catch (Exception ex)
@@ -701,17 +705,17 @@ namespace sw_drawer
                 upper.Contains("TIEPNT") ||
                 upper.Contains("TIE_PNT"))
             {
-                return ColorMap.TieRodColor;
+                return TieRodColor;
             }
 
-            foreach (var kvp in ColorMap.Colors)
+            foreach (var kvp in ColorMap)
             {
                 if (upper.Contains(kvp.Key.ToUpperInvariant()))
                 {
                     return kvp.Value;
                 }
             }
-            return ColorMap.DefaultColor;
+            return DefaultColor;
         }
 
         private static void CreateCoordinateSystem(ModelDoc2 swModel, BodyInfo bodyInfo)
@@ -945,153 +949,181 @@ namespace sw_drawer
         {
             if (args.Length < 4)
             {
-                Console.WriteLine("Usage: hardpoints insertpose <jsonPath> <poseName>");
+                Console.WriteLine("Usage: hardpoints insertpose <jsonDir> <poseName>");
                 return false;
             }
 
-            string jsonPath = args[2];
+            string jsonDir = args[2];
             string poseName = args[3];
 
             ReportState(HardpointState.Initializing);
 
             SldWorks swApp;
-            try
-            {
-                swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application");
-            }
-            catch
-            {
-                Console.WriteLine("Error: SolidWorks is not running");
-                return false;
-            }
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
 
             ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
             if (swModel == null)
-            {
-                Console.WriteLine("Error: No active document");
-                return false;
-            }
-
+            { Console.WriteLine("Error: No active document"); return false; }
             if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
-            {
-                Console.WriteLine("Error: Active document must be an assembly");
-                return false;
-            }
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
 
             AssemblyDoc swAssy = (AssemblyDoc)swModel;
 
             try
             {
                 ReportState(HardpointState.LoadingJson);
+                double rearOffsetMm = LoadRearReferenceOffsetMm(jsonDir);
+                var componentGroups = LoadComponentJsonFiles(jsonDir, rearOffsetMm);
 
-                string jsonDir = Path.GetDirectoryName(jsonPath);
-                string frontJsonPath = Path.Combine(jsonDir, "Front_Suspension.json");
-                string rearJsonPath = Path.Combine(jsonDir, "Rear_Suspension.json");
-                double rearReferenceOffsetMm = LoadRearReferenceOffsetMm(jsonDir);
+                int totalHardpoints = 0;
+                foreach (var group in componentGroups)
+                    totalHardpoints += group.Value.Count;
 
-                var hardpoints = new List<HardpointInfo>();
+                if (totalHardpoints == 0)
+                { Console.WriteLine("Error: No hardpoints found in component JSON files"); return false; }
 
-                if (File.Exists(frontJsonPath))
-                {
-                    var frontData = LoadJsonData(frontJsonPath);
-                    ExtractHardpointsWithSuffix(frontData, "_FRONT", hardpoints, 0.0);
-                    ExtractWheelsFromJson(frontData, "_FRONT", hardpoints, false, 0.0);
-                }
+                // Create (or reuse) a configuration named after the pose in the entire hierarchy
+                ConfigurationSync.CreateConfigurationInHierarchy(swAssy, swModel, poseName);
 
-                if (File.Exists(rearJsonPath))
-                {
-                    var rearData = LoadJsonData(rearJsonPath);
-                    ExtractHardpointsWithSuffix(rearData, "_REAR", hardpoints, rearReferenceOffsetMm);
-                    ExtractWheelsFromJson(rearData, "_REAR", hardpoints, true, rearReferenceOffsetMm);
-                }
+                // Switch top-level to the pose configuration
+                swModel.ShowConfiguration2(poseName);
+                Console.WriteLine($"Switched to configuration: {poseName}");
 
-                if (hardpoints.Count == 0)
-                {
-                    Console.WriteLine("Error: No hardpoints found in Front/Rear JSON files");
-                    return false;
-                }
+                // Sync all subassembly referenced configs to match
+                ConfigurationSync.SyncSubassemblyConfigurations(swAssy, poseName);
 
-                ConfigurationManager cfgMgr = swModel.ConfigurationManager;
-                Configuration activeCfg = cfgMgr != null ? cfgMgr.ActiveConfiguration : null;
-                if (activeCfg == null)
-                {
-                    Console.WriteLine("Error: Could not determine active configuration");
-                    return false;
-                }
-                string activeConfigName = activeCfg.Name;
-                Console.WriteLine($"Active configuration: {activeConfigName}");
-
-                object componentsObj = swAssy.GetComponents(false);
-                object[] components = componentsObj as object[];
-                if (components == null || components.Length == 0)
-                {
-                    Console.WriteLine("Error: No components found in assembly");
-                    return false;
-                }
-
-                List<Component2> hardpointComponents = InsertPoseGetComponentsForPoseMatching(swModel, components);
-                Console.WriteLine($"Pose matching component pool: {hardpointComponents.Count}");
-
-                int totalSteps = hardpoints.Count * 2 + 2;
+                int totalSteps = totalHardpoints * 2 + componentGroups.Count + 1;
                 Console.WriteLine($"TOTAL:{totalSteps}");
                 int progressCount = 0;
 
-                var poseCoordFeatures = new List<Feature>();
+                int totalPoseFeatures = 0;
 
                 ReportState(HardpointState.CreatingCoordinateSystems);
-                foreach (var hardpoint in hardpoints)
+                foreach (var group in componentGroups)
                 {
-                    string hardpointName = $"{hardpoint.BaseName}{hardpoint.Suffix}";
-                    string poseCoordName = $"{poseName} {hardpointName}";
+                    string subassyName = group.Key;
+                    List<HardpointInfo> hardpoints = group.Value;
 
-                    // Reuse InsertCoordinate implementation for coordinate creation behavior.
-                    Feature csFeat = InsertCoordinate.InsertCoordinateSystemFeature(
-                        swModel,
-                        poseCoordName,
-                        hardpoint.X,
-                        hardpoint.Y,
-                        hardpoint.Z,
-                        hardpoint.AngleX,
-                        hardpoint.AngleY,
-                        hardpoint.AngleZ,
-                        createAtOrigin: false,
-                        folderName: null,
-                        hideInGui: true);
-
-                    if (csFeat != null)
+                    // Find the target subassembly
+                    Component2 subassyComp = FindSubassemblyByName(swAssy, subassyName);
+                    if (subassyComp == null)
                     {
-                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, csFeat, activeConfigName);
-                        poseCoordFeatures.Add(csFeat);
+                        Console.WriteLine($"Warning: Subassembly '{subassyName}' not found, skipping pose for {hardpoints.Count} hardpoints");
+                        progressCount += hardpoints.Count * 2 + 1;
+                        ReportProgress(progressCount);
+                        continue;
                     }
 
-                    progressCount++;
-                    ReportProgress(progressCount);
-
-                    Component2 targetComp = InsertPoseFindComponentByHardpointName(hardpointComponents, hardpointName);
-                    if (targetComp != null)
+                    // Enter in-context edit for this subassembly
+                    string assyTitlePose = swModel.GetTitle();
+                    string compFullNamePose = $"{subassyComp.Name2}@{assyTitlePose}";
+                    swModel.ClearSelection2(true);
+                    bool selectedPose = swModel.Extension.SelectByID2(
+                        compFullNamePose, "COMPONENT", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (!selectedPose)
                     {
-                        Console.WriteLine($"Matched hardpoint '{hardpointName}' to component '{targetComp.Name2}'");
-                        InsertPoseCreateCoordinateSystemMate(
-                            swModel,
-                            swAssy,
-                            targetComp,
-                            hardpointName,
+                        Console.WriteLine($"Warning: Could not select '{compFullNamePose}' for edit context");
+                        progressCount += hardpoints.Count * 2 + 1;
+                        ReportProgress(progressCount);
+                        continue;
+                    }
+                    swAssy.EditAssembly();
+                    Console.WriteLine($"Entered in-context edit for '{subassyComp.Name2}'");
+
+                    // Get the subassembly's ModelDoc2 for feature-tree ops and mate matching.
+                    // Pose CSys features, coordinate mates, and folders all get created
+                    // directly on this doc — not routed through the top-level — so the
+                    // top-level SelectByID2 can't resolve their bare names later.
+                    ModelDoc2 subassyModel = subassyComp.GetModelDoc2() as ModelDoc2;
+                    AssemblyDoc subassyAssyDoc = subassyModel as AssemblyDoc;
+
+                    // Gather hardpoint components inside this subassembly for mate matching
+                    object[] subComponents = subassyAssyDoc?.GetComponents(false) as object[];
+                    List<Component2> hardpointComponents = subComponents != null
+                        ? InsertPoseGetComponentsForPoseMatching(subassyModel, subComponents)
+                        : new List<Component2>();
+
+                    var poseCoordFeatures = new List<Feature>();
+                    var poseMateFeatures = new List<Feature>();
+
+                    foreach (var hardpoint in hardpoints)
+                    {
+                        string hardpointName = $"{hardpoint.BaseName}{hardpoint.Suffix}";
+                        string poseCoordName = $"{poseName} {hardpointName}";
+
+                        // Create the pose CSys directly on the subassembly's doc so the
+                        // feature lives in the sub's tree and can be selected by bare name
+                        // from subassyModel.Extension later (top-level can't resolve it).
+                        Feature csFeat = InsertCoordinate.InsertCoordinateSystemFeature(
+                            subassyModel,
                             poseCoordName,
-                            activeConfigName);
+                            hardpoint.X,
+                            hardpoint.Y,
+                            hardpoint.Z,
+                            hardpoint.AngleX,
+                            hardpoint.AngleY,
+                            hardpoint.AngleZ,
+                            createAtOrigin: false,
+                            folderName: null,
+                            hideInGui: true);
+
+                        if (csFeat != null)
+                        {
+                            // Diagnostic on first iteration: verify the CSys landed in
+                            // the subassembly (owned model) not the top-level
+                            if (poseCoordFeatures.Count == 0)
+                                Console.WriteLine($"  First pose CSys created: '{csFeat.Name}' (type {csFeat.GetTypeName2()})");
+
+                            ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(subassyModel, csFeat, poseName);
+                            poseCoordFeatures.Add(csFeat);
+                        }
+
+                        progressCount++;
+                        ReportProgress(progressCount);
+
+                        Component2 targetComp = InsertPoseFindComponentByHardpointName(hardpointComponents, hardpointName);
+                        if (targetComp != null)
+                        {
+                            Console.WriteLine($"Matched hardpoint '{hardpointName}' to component '{targetComp.Name2}'");
+                            // Pass the subassembly's own model/assy handles — AddMate5 lands
+                            // the mate in the sub's MateGroup, SelectByID2 uses the sub's title.
+                            Feature mateFeat = InsertPoseCreateCoordinateSystemMate(
+                                subassyModel,
+                                subassyAssyDoc,
+                                targetComp,
+                                hardpointName,
+                                poseCoordName,
+                                poseName);
+                            if (mateFeat != null)
+                                poseMateFeatures.Add(mateFeat);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Warning: Could not find hardpoint component '{hardpointName}' for mating");
+                        }
+
+                        progressCount++;
+                        ReportProgress(progressCount);
                     }
-                    else
-                    {
-                        Console.WriteLine($"Warning: Could not find hardpoint component '{hardpointName}' for mating");
-                    }
+
+                    // Create transforms folder inside the subassembly's feature tree
+                    ReportState(HardpointState.CreatingTransformsFolder);
+                    InsertPoseCreateOrPopulateTransformsFolder(subassyModel, poseCoordFeatures, $"{poseName} Transforms");
+
+                    // Create mates folder inside the MateGroup
+                    InsertPoseCreateOrPopulateMatesFolder(subassyModel, poseMateFeatures, $"{poseName} Mates");
 
                     progressCount++;
                     ReportProgress(progressCount);
-                }
 
-                ReportState(HardpointState.CreatingTransformsFolder);
-                InsertPoseCreateOrPopulateTransformsFolder(swModel, poseCoordFeatures, $"{poseName} Transforms");
-                progressCount++;
-                ReportProgress(progressCount);
+                    totalPoseFeatures += poseCoordFeatures.Count;
+
+                    // Exit back to the top-level assembly
+                    swModel.ClearSelection2(true);
+                    swAssy.EditAssembly();
+                }
 
                 ReportState(HardpointState.Rebuilding);
                 swModel.EditRebuild3();
@@ -1099,7 +1131,7 @@ namespace sw_drawer
                 ReportProgress(progressCount);
 
                 ReportState(HardpointState.Complete);
-                Console.WriteLine($"Inserted pose '{poseName}' for {poseCoordFeatures.Count} hardpoints in active config '{activeConfigName}'");
+                Console.WriteLine($"Inserted pose '{poseName}' for {totalPoseFeatures} hardpoints in config '{poseName}'");
                 return true;
             }
             catch (Exception ex)
@@ -1109,39 +1141,256 @@ namespace sw_drawer
             }
         }
 
-        private static void InsertPoseSetFeatureToActiveConfigurationOnly(ModelDoc2 swModel, Feature feat, string activeConfigName)
+        // =====================================================================
+        // Pose management: list and delete
+        // =====================================================================
+
+        /// <summary>
+        /// List all pose configurations by scanning for "{name} Transforms" folders.
+        /// Outputs one POSE:{name} line per pose for the caller to parse.
+        /// </summary>
+        public static bool RunListPoses(string[] args)
         {
-            if (swModel == null || feat == null || string.IsNullOrWhiteSpace(activeConfigName))
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null)
+            { Console.WriteLine("Error: No active document"); return false; }
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+            var poseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            CollectPoseNames(swModel, poseNames);
+
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components != null)
             {
-                return;
+                foreach (object obj in components)
+                {
+                    Component2 comp = obj as Component2;
+                    ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
+                    if (compDoc != null && compDoc.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
+                        CollectPoseNames(compDoc, poseNames);
+                }
             }
 
-            try
-            {
-                object configNamesObj = swModel.GetConfigurationNames();
-                string[] configNames = configNamesObj as string[];
-                if (configNames == null || configNames.Length == 0)
-                {
-                    return;
-                }
+            foreach (string name in poseNames)
+                Console.WriteLine($"POSE:{name}");
 
-                foreach (string cfgName in configNames)
-                {
-                    int state = string.Equals(cfgName, activeConfigName, StringComparison.OrdinalIgnoreCase)
-                        ? (int)swFeatureSuppressionAction_e.swUnSuppressFeature
-                        : (int)swFeatureSuppressionAction_e.swSuppressFeature;
+            Console.WriteLine($"Found {poseNames.Count} pose(s)");
+            return true;
+        }
 
-                    feat.SetSuppression2(
-                        state,
-                        (int)swInConfigurationOpts_e.swSpecifyConfiguration,
-                        new string[] { cfgName });
-                }
-            }
-            catch (Exception ex)
+        private static void CollectPoseNames(ModelDoc2 swModel, HashSet<string> poseNames)
+        {
+            const string suffix = " Transforms";
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
             {
-                Console.WriteLine($"Warning: Could not scope feature '{feat.Name}' to active configuration: {ex.Message}");
+                if (feat.GetTypeName2() == "FtrFolder" &&
+                    feat.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string poseName = feat.Name.Substring(0, feat.Name.Length - suffix.Length);
+                    if (!string.IsNullOrWhiteSpace(poseName))
+                        poseNames.Add(poseName);
+                }
+                feat = (Feature)feat.GetNextFeature();
             }
         }
+
+        /// <summary>
+        /// Delete a pose: remove its transforms folder, coordinate systems, mates,
+        /// and configuration from the top-level assembly and all subassemblies.
+        /// </summary>
+        public static bool RunDeletePose(string[] args)
+        {
+            if (args.Length < 3)
+            {
+                Console.WriteLine("Usage: hardpoints deletepose <poseName>");
+                return false;
+            }
+
+            string poseName = args[2];
+
+            SldWorks swApp;
+            try { swApp = (SldWorks)Marshal.GetActiveObject("SldWorks.Application"); }
+            catch { Console.WriteLine("Error: SolidWorks is not running"); return false; }
+
+            ModelDoc2 swModel = (ModelDoc2)swApp.ActiveDoc;
+            if (swModel == null)
+            { Console.WriteLine("Error: No active document"); return false; }
+            if (swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            { Console.WriteLine("Error: Active document must be an assembly"); return false; }
+
+            AssemblyDoc swAssy = (AssemblyDoc)swModel;
+
+            // Switch away from the pose config before deleting it
+            string activeConfig = swModel.ConfigurationManager?.ActiveConfiguration?.Name ?? "";
+            if (string.Equals(activeConfig, poseName, StringComparison.OrdinalIgnoreCase))
+            {
+                string[] configs = swModel.GetConfigurationNames() as string[];
+                string fallback = "Default";
+                foreach (string c in configs ?? new string[0])
+                {
+                    if (!string.Equals(c, poseName, StringComparison.OrdinalIgnoreCase))
+                    { fallback = c; break; }
+                }
+                swModel.ShowConfiguration2(fallback);
+                Console.WriteLine($"Switched to configuration '{fallback}'");
+            }
+
+            int totalDeleted = 0;
+
+            // Delete from each subassembly — operate directly on the sub's loaded doc
+            // so the top-level assembly stays the active document throughout (no
+            // title-bar flipping). DeletePoseFromModel only touches the passed model's
+            // FirstFeature / EditDelete / MateGroup, so no active-doc switch is needed.
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components != null)
+            {
+                foreach (object obj in components)
+                {
+                    Component2 comp = obj as Component2;
+                    ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
+                    if (compDoc == null || compDoc.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+                        continue;
+
+                    totalDeleted += DeletePoseFromModel(compDoc, poseName);
+                }
+            }
+
+            // Delete from top-level
+            totalDeleted += DeletePoseFromModel(swModel, poseName);
+
+            // Delete configuration from hierarchy
+            DeleteConfigurationFromHierarchy(swAssy, swModel, poseName);
+
+            swModel.EditRebuild3();
+            Console.WriteLine($"Deleted pose '{poseName}': removed {totalDeleted} features");
+            return true;
+        }
+
+        private static int DeletePoseFromModel(ModelDoc2 swModel, string poseName)
+        {
+            if (swModel == null) return 0;
+
+            string transformsFolderName = $"{poseName} Transforms";
+            string matesFolderName = $"{poseName} Mates";
+            string posePrefix = $"{poseName} ";
+            int deleted = 0;
+
+            var toDelete = new List<Feature>();
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                string typeName = feat.GetTypeName2();
+                string name = feat.Name;
+
+                if (typeName == "FtrFolder" &&
+                    (string.Equals(name, transformsFolderName, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(name, matesFolderName, StringComparison.OrdinalIgnoreCase)))
+                    toDelete.Add(feat);
+                else if (typeName == "CoordSys" && name.StartsWith(posePrefix, StringComparison.OrdinalIgnoreCase))
+                    toDelete.Add(feat);
+
+                feat = (Feature)feat.GetNextFeature();
+            }
+
+            // Find mates belonging to this pose
+            Feature matesGroup = FindMatesGroupFeature(swModel);
+            if (matesGroup != null)
+            {
+                Feature subFeat = (Feature)matesGroup.GetFirstSubFeature();
+                while (subFeat != null)
+                {
+                    if (subFeat.Name.StartsWith(posePrefix, StringComparison.OrdinalIgnoreCase))
+                        toDelete.Add(subFeat);
+                    subFeat = (Feature)subFeat.GetNextSubFeature();
+                }
+            }
+
+            for (int i = toDelete.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    swModel.ClearSelection2(true);
+                    toDelete[i].Select2(false, 0);
+                    swModel.EditDelete();
+                    deleted++;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Could not delete '{toDelete[i].Name}': {ex.Message}");
+                }
+            }
+
+            if (deleted > 0)
+                Console.WriteLine($"Deleted {deleted} features from {swModel.GetTitle()}");
+            return deleted;
+        }
+
+        private static Feature FindMatesGroupFeature(ModelDoc2 swModel)
+        {
+            Feature feat = (Feature)swModel.FirstFeature();
+            while (feat != null)
+            {
+                if (feat.GetTypeName2() == "MateGroup")
+                    return feat;
+                feat = (Feature)feat.GetNextFeature();
+            }
+            return null;
+        }
+
+        private static void DeleteConfigurationFromHierarchy(
+            AssemblyDoc swAssy, ModelDoc2 swModel, string configName)
+        {
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components != null)
+            {
+                foreach (object obj in components)
+                {
+                    Component2 comp = obj as Component2;
+                    ModelDoc2 compDoc = comp?.GetModelDoc2() as ModelDoc2;
+                    if (compDoc != null)
+                        DeleteConfigurationIfExists(compDoc, configName);
+                }
+            }
+            DeleteConfigurationIfExists(swModel, configName);
+        }
+
+        private static void DeleteConfigurationIfExists(ModelDoc2 swModel, string configName)
+        {
+            string[] configs = swModel.GetConfigurationNames() as string[];
+            if (configs == null) return;
+
+            foreach (string c in configs)
+            {
+                if (!string.Equals(c, configName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string active = swModel.ConfigurationManager?.ActiveConfiguration?.Name ?? "";
+                if (string.Equals(active, configName, StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (string other in configs)
+                    {
+                        if (!string.Equals(other, configName, StringComparison.OrdinalIgnoreCase))
+                        { swModel.ShowConfiguration2(other); break; }
+                    }
+                }
+
+                bool deleted = swModel.DeleteConfiguration2(configName);
+                Console.WriteLine(deleted
+                    ? $"Deleted configuration '{configName}' from {swModel.GetTitle()}"
+                    : $"Warning: Could not delete configuration '{configName}' from {swModel.GetTitle()}");
+                return;
+            }
+        }
+
+
 
         private static Component2 InsertPoseFindComponentByHardpointName(List<Component2> components, string hardpointName)
         {
@@ -1361,7 +1610,7 @@ namespace sw_drawer
             return normalized.Trim();
         }
 
-        private static void InsertPoseCreateCoordinateSystemMate(
+        private static Feature InsertPoseCreateCoordinateSystemMate(
             ModelDoc2 swModel,
             AssemblyDoc swAssy,
             Component2 comp,
@@ -1373,13 +1622,14 @@ namespace sw_drawer
                 string.IsNullOrWhiteSpace(componentCoordName) ||
                 string.IsNullOrWhiteSpace(poseCoordName))
             {
-                return;
+                return null;
             }
 
             try
             {
                 swModel.ClearSelection2(true);
 
+                // First selection: the pose-level coordinate system in the subassembly
                 bool csSelected = swModel.Extension.SelectByID2(
                     poseCoordName,
                     "COORDSYS",
@@ -1393,12 +1643,20 @@ namespace sw_drawer
                 {
                     Console.WriteLine($"Warning: Could not select pose CSys '{poseCoordName}' for mate");
                     swModel.ClearSelection2(true);
-                    return;
+                    return null;
                 }
 
-                string assemblyTitle = Path.GetFileNameWithoutExtension(swModel.GetPathName());
+                // Second selection: the coordinate system INSIDE the virtual-part component.
+                // Build the path using the instance name format SW uses when the subassembly
+                // is the active doc. Virtual parts have "Name^ParentAssy-N" as Name2.
+                string assyTitle = swModel.GetTitle();
+                string compPath = componentCoordName + "@" + comp.Name2 + "@" + assyTitle;
+                Console.WriteLine($"  Attempting selection: '{compPath}'");
+
+                // COORDINATE mate (AddMate5 with swMateCOORDINATE) wants both entities
+                // at selection mark 1, not split between marks 1 and 2 like coincident mates.
                 bool compCsSelected = swModel.Extension.SelectByID2(
-                    componentCoordName + "@" + comp.Name2 + "@" + assemblyTitle,
+                    compPath,
                     "COORDSYS",
                     0, 0, 0,
                     true,
@@ -1408,48 +1666,235 @@ namespace sw_drawer
 
                 if (!compCsSelected)
                 {
-                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
-                    swModel.ClearSelection2(true);
-                    return;
+                    compCsSelected = TrySelectComponentCoordSystem(swModel, comp, componentCoordName);
                 }
 
+                if (!compCsSelected)
+                {
+                    Console.WriteLine($"Warning: Could not select component CSys '{componentCoordName}' for '{comp.Name2}'");
+                    swModel.ClearSelection2(true);
+                    return null;
+                }
+
+                // Verify both selections are present before AddMate5
+                SelectionMgr selMgrVerify = swModel.SelectionManager as SelectionMgr;
+                int selCount = selMgrVerify?.GetSelectedObjectCount2(-1) ?? 0;
+                Console.WriteLine($"  Selection count before AddMate5: {selCount}");
+                if (selCount < 2)
+                {
+                    Console.WriteLine($"Warning: Expected 2 selections for mate, got {selCount}");
+                    swModel.ClearSelection2(true);
+                    return null;
+                }
+
+                // Snapshot existing mate feature names BEFORE AddMate5 so we can diff after
+                var beforeMates = EnumerateMateFeatureNames(swModel);
+
                 Mate2 mate = swAssy.AddMate5(
-                    (int)swMateType_e.swMateCOORDINATE,        // 20
-                    (int)swMateAlign_e.swMateAlignALIGNED,     // 0 (aligned)
-                    false,                                     // Flip
-                    0,                                         // Distance
-                    0.001, 0.001,                              // DistanceAbsMin, DistanceAbsMax
-                    0.001, 0.001,                              // GearRatioNumerator, GearRatioDenominator
-                    0.5235987755983,                           // Angle (30 deg in radians)
-                    0.5235987755983, 0.5235987755983,          // AngleAbsMin, AngleAbsMax
-                    false,                                     // ForPositioningOnly
-                    false,                                     // LockRotation
-                    0,                                         // WidthMateOption
+                    (int)swMateType_e.swMateCOORDINATE,
+                    (int)swMateAlign_e.swMateAlignALIGNED,
+                    false,
+                    0,
+                    0.001, 0.001,
+                    0.001, 0.001,
+                    0.5235987755983,
+                    0.5235987755983, 0.5235987755983,
+                    false,
+                    false,
+                    0,
                     out int mateError
                 );
 
-                if (mate != null && mateError == 0)
+                // AddMate5 sometimes returns a non-zero error code (commonly 1 =
+                // "IncorrectSelections") even when the mate was successfully created.
+                // Trust the tree state, not the error code: diff the MateGroup before
+                // and after the call to find the new mate. Only fail if we can't
+                // locate a new mate AND the API call reported an error.
+                Feature mateFeature = FindNewMateFeature(swModel, beforeMates);
+
+                // Fallback: first-mate edge case (no MateGroup before AddMate5)
+                if (mateFeature == null)
                 {
-                    Feature mateFeature = (Feature)swModel.FeatureByPositionReverse(0);
+                    SelectionMgr selMgr = swModel.SelectionManager as SelectionMgr;
+                    if (selMgr != null && selMgr.GetSelectedObjectCount2(-1) > 0)
+                        mateFeature = selMgr.GetSelectedObject6(1, -1) as Feature;
+                }
 
-                    // Scope mate to active configuration only (best effort).
-                    if (mateFeature != null)
+                swModel.ClearSelection2(true);
+
+                if (mateFeature == null)
+                {
+                    // No new mate feature AND no selection → genuinely failed
+                    Console.WriteLine($"Warning: AddMate5 failed for '{poseCoordName}' (error {mateError}, no new mate found)");
+                    return null;
+                }
+
+                if (mateError != 0)
+                {
+                    // Mate exists in the tree despite the error code — log but continue
+                    Console.WriteLine($"Note: AddMate5 returned error {mateError} but mate was created for '{poseCoordName}'");
+                }
+
+                Console.WriteLine($"Located new mate: '{mateFeature.Name}' (type {mateFeature.GetTypeName2()})");
+
+                try { mateFeature.Name = poseCoordName; }
+                catch (Exception ex)
+                { Console.WriteLine($"Warning: Could not rename mate: {ex.Message}"); }
+
+                bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
+                if (axisAligned)
+                    Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
+
+                ConfigurationSync.ScopeFeatureExclusivelyToConfiguration(swModel, mateFeature, activeConfigName);
+                return mateFeature;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to mate '{comp.Name2}' to '{poseCoordName}': {ex.Message}");
+                try { swModel.ClearSelection2(true); } catch { }
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Fallback selection for a coordinate system inside a virtual-part component.
+        /// Walks the component's model doc feature tree to locate the CSys by name,
+        /// then calls Select2 on it with selection mark 2 (for the second mate entity).
+        /// </summary>
+        private static bool TrySelectComponentCoordSystem(
+            ModelDoc2 swModel, Component2 comp, string csName)
+        {
+            if (comp == null || string.IsNullOrWhiteSpace(csName))
+                return false;
+
+            try
+            {
+                ModelDoc2 compDoc = comp.GetModelDoc2() as ModelDoc2;
+                if (compDoc == null)
+                {
+                    Console.WriteLine($"  Fallback: component '{comp.Name2}' has no model doc");
+                    return false;
+                }
+
+                Feature feat = (Feature)compDoc.FirstFeature();
+                while (feat != null)
+                {
+                    if (feat.GetTypeName2() == "CoordSys" &&
+                        string.Equals(feat.Name, csName, StringComparison.OrdinalIgnoreCase))
                     {
-                        bool axisAligned = TryEnableCoincidentMateAxisAlignment(swModel, mateFeature);
-                        if (axisAligned)
-                        {
-                            Console.WriteLine($"Enabled coincident mate axis alignment for '{comp.Name2}'");
-                        }
-
-                        InsertPoseSetFeatureToActiveConfigurationOnly(swModel, mateFeature, activeConfigName);
+                        bool ok = feat.Select2(true, 2);
+                        Console.WriteLine($"  Fallback select of '{csName}' in '{comp.Name2}': {ok}");
+                        return ok;
                     }
+                    feat = (Feature)feat.GetNextFeature();
+                }
+
+                Console.WriteLine($"  Fallback: CSys '{csName}' not found in '{comp.Name2}'");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  Fallback selection error for '{csName}': {ex.Message}");
+            }
+            return false;
+        }
+
+        /// <summary>Return a set of mate feature names currently inside the MateGroup.</summary>
+        private static HashSet<string> EnumerateMateFeatureNames(ModelDoc2 swModel)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            Feature mateGroup = FindMatesGroupFeature(swModel);
+            if (mateGroup == null) return names;
+
+            Feature sub = (Feature)mateGroup.GetFirstSubFeature();
+            while (sub != null)
+            {
+                if (!string.IsNullOrEmpty(sub.Name))
+                    names.Add(sub.Name);
+                sub = (Feature)sub.GetNextSubFeature();
+            }
+            return names;
+        }
+
+        /// <summary>
+        /// After AddMate5, diff the MateGroup against the snapshot to find the new mate.
+        /// If there is no MateGroup yet (first-mate edge case), returns null — caller
+        /// should fall back to the selection manager.
+        /// </summary>
+        private static Feature FindNewMateFeature(ModelDoc2 swModel, HashSet<string> beforeMates)
+        {
+            Feature mateGroup = FindMatesGroupFeature(swModel);
+            if (mateGroup == null) return null;
+
+            Feature sub = (Feature)mateGroup.GetFirstSubFeature();
+            while (sub != null)
+            {
+                if (!beforeMates.Contains(sub.Name))
+                    return sub;
+                sub = (Feature)sub.GetNextSubFeature();
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Create or populate a mate folder inside the MateGroup. Mates must be selected
+        /// inside the mate group context, so we select each by feature name with the
+        /// "MATE" object type hint.
+        /// </summary>
+        private static void InsertPoseCreateOrPopulateMatesFolder(ModelDoc2 swModel, List<Feature> mateFeatures, string folderName)
+        {
+            if (swModel == null || mateFeatures == null || mateFeatures.Count == 0 || string.IsNullOrWhiteSpace(folderName))
+                return;
+
+            try
+            {
+                FeatureManager featMgr = swModel.FeatureManager;
+                if (featMgr == null)
+                    return;
+
+                // Reuse existing folder if it exists — just move mates into it
+                Feature existingFolder = InsertPoseFindFolder(swModel, folderName);
+                if (existingFolder != null)
+                {
+                    foreach (Feature feat in mateFeatures)
+                    {
+                        if (feat != null)
+                            featMgr.MoveToFolder(folderName, feat.Name, false);
+                    }
+                    Console.WriteLine($"Added mates to existing folder '{folderName}'");
+                    return;
+                }
+
+                // Select each mate by name, then insert a containing folder
+                swModel.ClearSelection2(true);
+                int selectedCount = 0;
+                foreach (Feature feat in mateFeatures)
+                {
+                    if (feat == null) continue;
+                    bool selected = swModel.Extension.SelectByID2(
+                        feat.Name, "MATE", 0, 0, 0, true, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (selected) selectedCount++;
+                }
+
+                if (selectedCount == 0)
+                {
+                    swModel.ClearSelection2(true);
+                    Console.WriteLine($"Warning: Could not select any mates for folder '{folderName}'");
+                    return;
+                }
+
+                Feature folder = featMgr.InsertFeatureTreeFolder2((int)swFeatureTreeFolderType_e.swFeatureTreeFolder_Containing);
+                if (folder != null)
+                {
+                    folder.Name = folderName;
+                    Console.WriteLine($"Created mate folder '{folderName}' with {selectedCount} mate(s)");
                 }
 
                 swModel.ClearSelection2(true);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Failed to mate '{comp.Name2}' to '{poseCoordName}': {ex.Message}");
+                Console.WriteLine($"Warning: Failed to create/populate mate folder '{folderName}': {ex.Message}");
                 try { swModel.ClearSelection2(true); } catch { }
             }
         }
@@ -1539,7 +1984,7 @@ namespace sw_drawer
                 return false;
             }
 
-            string assemblyTitle = Path.GetFileNameWithoutExtension(swModel.GetPathName());
+            string assemblyTitle = swModel.GetTitle();
             string componentName = comp.Name2 ?? string.Empty;
 
             bool selected = swModel.Extension.SelectByID2(
@@ -2074,6 +2519,214 @@ namespace sw_drawer
             }
         }
 
+        // =====================================================================
+        // Component-based JSON loading (5-file format)
+        // =====================================================================
+
+        /// <summary>
+        /// Component JSON file names and the subassembly they map to.
+        /// </summary>
+        private static readonly string[] ComponentFileNames = new[]
+        {
+            "Inboard", "FL_Corner", "FR_Corner", "RL_Corner", "RR_Corner"
+        };
+
+        /// <summary>Map file stem (e.g. "FL_Corner") to SolidWorks subassembly display name.</summary>
+        private static string FileNameToSubassemblyName(string fileStem)
+        {
+            return fileStem.Replace("_", " ");  // FL_Corner → FL Corner
+        }
+
+        /// <summary>
+        /// Load all 5 component JSON files from <paramref name="jsonDir"/> and return
+        /// hardpoints grouped by target subassembly name.
+        /// </summary>
+        private static Dictionary<string, List<HardpointInfo>> LoadComponentJsonFiles(
+            string jsonDir, double rearReferenceOffsetMm)
+        {
+            var groups = new Dictionary<string, List<HardpointInfo>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string fileStem in ComponentFileNames)
+            {
+                string path = Path.Combine(jsonDir, fileStem + ".json");
+                if (!File.Exists(path))
+                {
+                    Console.WriteLine($"Warning: {fileStem}.json not found, skipping");
+                    continue;
+                }
+
+                string subassyName = FileNameToSubassemblyName(fileStem);
+                var hardpoints = new List<HardpointInfo>();
+                var jsonData = LoadJsonData(path);
+
+                if (fileStem == "Inboard")
+                    LoadInboardJson(jsonData, subassyName, hardpoints, rearReferenceOffsetMm);
+                else
+                    LoadCornerJson(jsonData, fileStem, subassyName, hardpoints, rearReferenceOffsetMm);
+
+                if (hardpoints.Count > 0)
+                    groups[subassyName] = hardpoints;
+
+                Console.WriteLine($"Loaded {hardpoints.Count} hardpoints from {fileStem}.json → {subassyName}");
+            }
+
+            return groups;
+        }
+
+        /// <summary>Load Inboard.json which has {Front: {...}, Rear: {...}} structure.</summary>
+        private static void LoadInboardJson(
+            Dictionary<string, object> jsonData,
+            string subassyName,
+            List<HardpointInfo> hardpoints,
+            double rearReferenceOffsetMm)
+        {
+            foreach (var axle in jsonData)
+            {
+                bool isRear = string.Equals(axle.Key, "Rear", StringComparison.OrdinalIgnoreCase);
+                double xOffset = isRear ? rearReferenceOffsetMm : 0.0;
+                string suffix = isRear ? "_REAR" : "_FRONT";
+
+                var points = axle.Value as Dictionary<string, object>;
+                if (points == null) continue;
+
+                foreach (var pt in points)
+                {
+                    var coords = pt.Value as List<object>;
+                    if (coords == null || coords.Count < 3) continue;
+
+                    hardpoints.Add(new HardpointInfo
+                    {
+                        BaseName = pt.Key,
+                        Suffix = suffix,
+                        X = Convert.ToDouble(coords[0]) + xOffset,
+                        Y = Convert.ToDouble(coords[1]),
+                        Z = Convert.ToDouble(coords[2]),
+                        TargetSubassembly = subassyName
+                    });
+                }
+            }
+        }
+
+        /// <summary>Load a corner JSON file (flat point dict + optional Wheels sub-object).</summary>
+        private static void LoadCornerJson(
+            Dictionary<string, object> jsonData,
+            string fileStem,
+            string subassyName,
+            List<HardpointInfo> hardpoints,
+            double rearReferenceOffsetMm)
+        {
+            bool isRear = fileStem.StartsWith("R", StringComparison.OrdinalIgnoreCase);
+            double xOffset = isRear ? rearReferenceOffsetMm : 0.0;
+            string suffix = isRear ? "_REAR" : "_FRONT";
+
+            foreach (var entry in jsonData)
+            {
+                if (string.Equals(entry.Key, "Wheels", StringComparison.OrdinalIgnoreCase))
+                {
+                    LoadCornerWheelHardpoint(entry.Value as Dictionary<string, object>,
+                                             fileStem, suffix, subassyName,
+                                             hardpoints, xOffset);
+                    continue;
+                }
+
+                var coords = entry.Value as List<object>;
+                if (coords == null || coords.Count < 3) continue;
+
+                hardpoints.Add(new HardpointInfo
+                {
+                    BaseName = entry.Key,
+                    Suffix = suffix,
+                    X = Convert.ToDouble(coords[0]) + xOffset,
+                    Y = Convert.ToDouble(coords[1]),
+                    Z = Convert.ToDouble(coords[2]),
+                    TargetSubassembly = subassyName
+                });
+            }
+        }
+
+        /// <summary>Build a single wheel hardpoint from scalar wheel parameters in a corner file.</summary>
+        private static void LoadCornerWheelHardpoint(
+            Dictionary<string, object> wheelsData,
+            string fileStem,
+            string suffix,
+            string subassyName,
+            List<HardpointInfo> hardpoints,
+            double xOffset)
+        {
+            if (wheelsData == null) return;
+
+            double halfTrack = GetWheelScalarValue(wheelsData, "Half Track");
+            double tireDiameter = GetWheelScalarValue(wheelsData, "Tire Diameter");
+            double lateralOffset = GetWheelScalarValue(wheelsData, "Lateral Offset", 0.0);
+            double verticalOffset = GetWheelScalarValue(wheelsData, "Vertical Offset", 0.0);
+            double longOffset = GetWheelScalarValue(wheelsData, "Longitudinal Offset", 0.0);
+            double camber = GetWheelScalarValue(wheelsData, "Static Camber", 0.0);
+            double toe = GetWheelScalarValue(wheelsData, "Static Toe", 0.0);
+
+            double x = xOffset + longOffset;
+            double y = halfTrack + lateralOffset;
+            double z = tireDiameter / 2.0 + verticalOffset;
+
+            // Determine left vs right from the second character: FL, FR, RL, RR
+            bool isRightSide = fileStem.Length >= 2 && fileStem[1] == 'R';
+            if (isRightSide)
+            {
+                y = -y;
+                camber = -camber;
+                toe = -toe;
+            }
+
+            hardpoints.Add(new HardpointInfo
+            {
+                BaseName = $"{fileStem.Replace("_Corner", "")}_wheel",
+                Suffix = suffix,
+                X = x,
+                Y = y,
+                Z = z,
+                AngleX = camber,
+                AngleY = 0,
+                AngleZ = toe,
+                TargetSubassembly = subassyName
+            });
+        }
+
+        /// <summary>Get a scalar double from wheel data (new format: values are direct, not left/right dicts).</summary>
+        private static double GetWheelScalarValue(Dictionary<string, object> wheelsData, string key, double defaultValue = 0.0)
+        {
+            if (wheelsData.TryGetValue(key, out object val))
+            {
+                if (val is double d) return d;
+                if (double.TryParse(val?.ToString(), out double parsed)) return parsed;
+            }
+            return defaultValue;
+        }
+
+        /// <summary>
+        /// Find a subassembly component in the top-level assembly by display name.
+        /// Strips instance suffixes like &lt;1&gt; for matching.
+        /// </summary>
+        private static Component2 FindSubassemblyByName(AssemblyDoc swAssy, string subassyName)
+        {
+            object[] components = swAssy.GetComponents(false) as object[];
+            if (components == null) return null;
+
+            foreach (object obj in components)
+            {
+                Component2 comp = obj as Component2;
+                if (comp == null) continue;
+
+                string normalized = SolidWorksHelperUtils.NormalizeComponentNameCore(comp.Name2, false);
+                if (string.Equals(normalized, subassyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    ModelDoc2 compDoc = comp.GetModelDoc2() as ModelDoc2;
+                    if (compDoc != null && compDoc.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
+                        return comp;
+                }
+            }
+
+            return null;
+        }
+
         private static void ExtractHardpointsWithSuffix(Dictionary<string, object> jsonData, string suffix, List<HardpointInfo> hardpoints)
         {
             ExtractHardpointsWithSuffix(jsonData, suffix, hardpoints, 0.0);
@@ -2170,7 +2823,7 @@ namespace sw_drawer
                 // Fallback selection by name if direct component selection fails
                 if (!selected)
                 {
-                    string assyTitle = Path.GetFileNameWithoutExtension(swModel.GetPathName());
+                    string assyTitle = swModel.GetTitle();
                     string compName = partInfo.Component.Name2;
                     selected = swModel.Extension.SelectByID2(
                         $"{compName}@{assyTitle}",
@@ -2792,6 +3445,8 @@ namespace sw_drawer
             public double AngleX { get; set; }
             public double AngleY { get; set; }
             public double AngleZ { get; set; }
+            /// <summary>Target subassembly name (e.g. "Inboard", "FL Corner").</summary>
+            public string TargetSubassembly { get; set; }
         }
 
         private class BodyInfo
