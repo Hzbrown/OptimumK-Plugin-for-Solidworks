@@ -8,8 +8,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, QVB
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QMessageBox,
                              QProgressBar, QGroupBox, QGridLayout, QCheckBox, QLineEdit, QSpinBox,
                              QListWidget)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 
 sys.path.insert(0, os.path.dirname(__file__))
 from coordinate_insertion import CoordinateInsertionWorker, insert_coordinates, validate_files, get_marker_path, create_coordinates_folder
@@ -2043,17 +2042,20 @@ class HelpTab(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-    
+
     def init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        web = QWebEngineView()
-        help_path = os.path.join(os.path.dirname(__file__), "help.htm")
-        web.load(QUrl.fromLocalFile(help_path))
-        layout.addWidget(web)
-        
+
+        btn = QPushButton("Open Help in Browser")
+        btn.clicked.connect(self._open_help)
+        layout.addWidget(btn)
+        layout.addStretch()
+
         self.setLayout(layout)
+
+    def _open_help(self):
+        import webbrowser
+        webbrowser.open(get_resource_path("help.htm"))
 
 
 def get_project_path(widget):
