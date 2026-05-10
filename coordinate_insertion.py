@@ -229,7 +229,7 @@ def get_marker_path():
     """
     marker_paths = []
 
-    # Packaged build: check exe directory first (e.g., C:\Program Files\OptimumK\)
+    # Packaged build: check exe directory first (e.g., C:\Program Files\SolidworksOptKPlugin\)
     if getattr(sys, 'frozen', False):
         exe_dir = os.path.dirname(sys.executable)
         marker_paths.extend([

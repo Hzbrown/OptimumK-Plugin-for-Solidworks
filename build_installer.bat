@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 
 :: ============================================================
 :: build_installer.bat
-:: Builds the full OptimumK SolidWorks Plugin installer.
+:: Builds the full SolidworksOptKPlugin installer.
 ::
 :: Prerequisites:
 ::   - .NET SDK / MSBuild (for the C# project)
@@ -38,7 +38,7 @@ echo [3/4] Staging files...
 if not exist "%SRC_DIR%" mkdir "%SRC_DIR%"
 
 :: Python exe
-copy /Y "%SCRIPT_DIR%dist\OptimumK_SolidWorks_Plugin.exe" "%SRC_DIR%\" || goto :copy_err
+copy /Y "%SCRIPT_DIR%dist\SolidworksOptKPlugin.exe" "%SRC_DIR%\" || goto :copy_err
 
 :: C# exe
 copy /Y "%SCRIPT_DIR%sw_drawer\bin\Release\net48\SuspensionTools.exe" "%SRC_DIR%\" || goto :copy_err
@@ -87,7 +87,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================
-echo Done!  Installer: %SCRIPT_DIR%installer\OptimumK_Setup.exe
+echo Done!  Installer: %SCRIPT_DIR%installer\SolidworksOptKPlugin_Setup.exe
 echo ============================================================
 exit /b 0
 

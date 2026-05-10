@@ -78,7 +78,7 @@ namespace sw_drawer
             string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             string[] searchPaths = new[]
             {
-                // Packaged install (shipped alongside exe in C:\Program Files\OptimumK\)
+                // Packaged install (shipped alongside exe in C:\Program Files\SolidworksOptKPlugin\)
                 Path.Combine(exeDir, "Marker.SLDPRT"),
                 Path.Combine(exeDir, "Marker.sldprt"),
 

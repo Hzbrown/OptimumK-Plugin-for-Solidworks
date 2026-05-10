@@ -5,11 +5,11 @@ import sys
 def get_data_dir():
     """Return the writable base directory for user data (profiles, poses, etc.).
 
-    Packaged builds: %LOCALAPPDATA%/OptimumK  (avoids writing into Program Files)
+    Packaged builds: %LOCALAPPDATA%/SolidworksOptKPlugin  (avoids writing into Program Files)
     Dev builds:      the project root (same as script location)
     """
     if getattr(sys, 'frozen', False):
-        base = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'OptimumK')
+        base = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'SolidworksOptKPlugin')
     else:
         base = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(base, exist_ok=True)

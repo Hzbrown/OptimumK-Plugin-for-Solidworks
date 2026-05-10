@@ -32,7 +32,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='OptimumK_SolidWorks_Plugin',
+    name='SolidworksOptKPlugin',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

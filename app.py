@@ -284,10 +284,10 @@ class ProjectTab(QWidget):
         self.init_ui()
 
     def _get_app(self):
-        """Walk up the widget tree to find OptimumKApp."""
+        """Walk up the widget tree to find SolidworksOptKPluginApp."""
         widget = self.parent()
         while widget is not None:
-            if isinstance(widget, OptimumKApp):
+            if isinstance(widget, SolidworksOptKPluginApp):
                 return widget
             widget = widget.parent()
         return None
@@ -2042,23 +2042,23 @@ class HelpTab(QWidget):
 
 
 def get_project_path(widget):
-    """Walk up from any child widget to find the active project path on OptimumKApp."""
+    """Walk up from any child widget to find the active project path on SolidworksOptKPluginApp."""
     w = widget.parent()
     while w is not None:
-        if isinstance(w, OptimumKApp):
+        if isinstance(w, SolidworksOptKPluginApp):
             return getattr(w, "project_path", None)
         w = w.parent()
     return None
 
 
-class OptimumKApp(QMainWindow):
+class SolidworksOptKPluginApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.project_path = None
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("OptimumK SolidWorks Plugin")
+        self.setWindowTitle("SolidworksOptKPlugin")
         self.setGeometry(100, 100, 700, 700)
 
         tabs = QTabWidget()
@@ -2075,6 +2075,6 @@ class OptimumKApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = OptimumKApp()
+    window = SolidworksOptKPluginApp()
     window.show()
     sys.exit(app.exec_())

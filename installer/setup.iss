@@ -1,21 +1,21 @@
-; OptimumK SolidWorks Plugin – Inno Setup installer script
+; SolidworksOptKPlugin – Inno Setup installer script
 ; Compile with: ISCC.exe installer\setup.iss
 ; Requires Inno Setup 6+ (https://jrsoftware.org/isdl.php)
 
-#define AppName      "OptimumK SolidWorks Plugin"
+#define AppName      "SolidworksOptKPlugin"
 #define AppVersion   "1.0.0"
-#define AppPublisher "OptimumK"
-#define AppExeName   "OptimumK_SolidWorks_Plugin.exe"
+#define AppPublisher "SolidworksOptKPlugin"
+#define AppExeName   "SolidworksOptKPlugin.exe"
 
 [Setup]
-AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+AppId={{4CB7AAF1-09BE-4A20-AB36-1951EECBD61A}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={commonpf64}\OptimumK
+DefaultDirName={commonpf64}\SolidworksOptKPlugin
 DefaultGroupName={#AppName}
 OutputDir=.
-OutputBaseFilename=OptimumK_Setup
+OutputBaseFilename=SolidworksOptKPlugin_Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
