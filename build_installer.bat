@@ -58,6 +58,14 @@ copy /Y "%SCRIPT_DIR%help.htm" "%SRC_DIR%\" || goto :copy_err
 if not exist "%SRC_DIR%\help_files" mkdir "%SRC_DIR%\help_files"
 xcopy /Y /Q "%SCRIPT_DIR%help_files\*.png" "%SRC_DIR%\help_files\" || goto :copy_err
 
+:: SolidWorks Project Template (must exist in project root)
+if not exist "%SCRIPT_DIR%Solidworks Project Template" (
+    echo ERROR: "Solidworks Project Template" folder not found in project root.
+    exit /b 1
+)
+if not exist "%SRC_DIR%\Solidworks Project Template" mkdir "%SRC_DIR%\Solidworks Project Template"
+xcopy /Y /Q /E "%SCRIPT_DIR%Solidworks Project Template\*" "%SRC_DIR%\Solidworks Project Template\" || goto :copy_err
+
 :: ── Step 4: Compile Inno Setup installer ─────────────────────
 echo.
 echo [4/4] Compiling installer...

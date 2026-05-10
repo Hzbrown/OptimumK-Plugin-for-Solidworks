@@ -23,6 +23,19 @@ def get_temp_dir():
     return temp
 
 
+def get_resource_path(*parts):
+    """Resolve a path to a read-only resource that ships with the app.
+
+    Packaged builds: alongside sys.executable (where Inno Setup installs files).
+    Dev builds:      relative to this script's directory (project root).
+    """
+    if getattr(sys, 'frozen', False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, *parts)
+
+
 def find_suspension_tools_exe():
     """Locate SuspensionTools.exe.
 

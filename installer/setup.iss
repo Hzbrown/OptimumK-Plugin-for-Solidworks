@@ -37,6 +37,8 @@ Source: "source\Marker.SLDPRT";        DestDir: "{app}"; Flags: ignoreversion
 ; Help file and images
 Source: "source\help.htm";             DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "source\help_files\*";         DestDir: "{app}\help_files"; Flags: ignoreversion
+; SolidWorks Project Template (read by the GUI when creating a new project)
+Source: "source\Solidworks Project Template\*"; DestDir: "{app}\Solidworks Project Template"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Application icon
 Source: "source\icon.ico";             DestDir: "{app}"; Flags: ignoreversion
 

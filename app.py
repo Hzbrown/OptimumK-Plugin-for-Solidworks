@@ -29,6 +29,7 @@ from draw_suspension import (
     create_all_markers_with_worker, delete_all_markers_with_worker
 )
 from solidworks_release import release_solidworks_command_state
+from utils import get_resource_path
 
 
 class QtStream(QObject):
@@ -292,8 +293,8 @@ class ProjectTab(QWidget):
             widget = widget.parent()
         return None
 
-    def _default_template_path(self):
-        return os.path.join(os.path.dirname(__file__), self.TEMPLATE_SUBDIR)
+    def _template_path(self):
+        return get_resource_path(self.TEMPLATE_SUBDIR)
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -307,12 +308,7 @@ class ProjectTab(QWidget):
 
         h_template = QHBoxLayout()
         h_template.addWidget(QLabel("Template Folder:"))
-        self.template_path_label = QLabel(self._default_template_path())
-        self.template_path_label.setWordWrap(True)
-        h_template.addWidget(self.template_path_label, 1)
-        btn_browse_template = QPushButton("Browse")
-        btn_browse_template.clicked.connect(self.browse_template_folder)
-        h_template.addWidget(btn_browse_template)
+        h_template.addWidget(QLabel(self.TEMPLATE_SUBDIR), 1)
         v_new.addLayout(h_template)
 
         h_dest = QHBoxLayout()
@@ -365,12 +361,6 @@ class ProjectTab(QWidget):
 
     # --- Browse helpers ---
 
-    def browse_template_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Template Folder",
-                                                  self._default_template_path())
-        if folder:
-            self.template_path_label.setText(folder)
-
     def browse_new_project_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Destination Folder")
         if folder:
@@ -384,11 +374,12 @@ class ProjectTab(QWidget):
     # --- Actions ---
 
     def create_new_project(self):
-        template_dir = self.template_path_label.text()
+        template_dir = self._template_path()
         dest_dir = self.new_project_path_label.text()
 
         if not os.path.isdir(template_dir):
-            QMessageBox.warning(self, "Invalid Template", "Template folder does not exist.")
+            QMessageBox.warning(self, "Template Missing",
+                                f"Bundled template folder not found:\n{template_dir}")
             return
         if dest_dir == "Not selected" or not os.path.isdir(dest_dir):
             QMessageBox.warning(self, "Invalid Destination", "Select a valid destination folder.")
