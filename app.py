@@ -28,7 +28,7 @@ from draw_suspension import (
     create_all_markers_with_worker, delete_all_markers_with_worker
 )
 from solidworks_release import release_solidworks_command_state
-from utils import get_resource_path
+from utils import get_resource_path, find_suspension_tools_exe
 
 
 class QtStream(QObject):
@@ -1383,15 +1383,16 @@ class CoordinateInsertionTab(QWidget):
                                 "Inboard.json not found in project folder. Parse an Excel file first.")
             return
 
-        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
+        marker_path = get_resource_path("Marker.SLDPRT")
         if not os.path.exists(marker_path):
-            QMessageBox.critical(self, "Missing Marker", "Marker.SLDPRT not found in plugin root folder")
+            QMessageBox.critical(self, "Missing Marker", f"Marker.SLDPRT not found at {marker_path}")
             return
 
         self.start_loading("Inserting hardpoints into subassemblies...")
 
         try:
-            exe_path = self._get_latest_suspension_tools_exe()
+            exe_path = find_suspension_tools_exe()
+            self.status_text.append(f"Using executable: {exe_path}")
             cmd = [exe_path, "hardpoints", "add", project_path, marker_path]
 
             self.worker = HardpointWorker(self.run_hardpoint_command, cmd)
@@ -1405,24 +1406,6 @@ class CoordinateInsertionTab(QWidget):
             self.status_text.append(f"✗ Error: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to run hardpoint runner: {str(e)}")
 
-    def _get_latest_suspension_tools_exe(self):
-        """Return the newest available SuspensionTools executable (Release/Debug)."""
-        sw_drawer_path = os.path.join(os.path.dirname(__file__), "sw_drawer")
-        candidates = [
-            os.path.join(sw_drawer_path, "bin", "Release", "net48", "SuspensionTools.exe"),
-            os.path.join(sw_drawer_path, "bin", "Debug", "net48", "SuspensionTools.exe"),
-            os.path.join(sw_drawer_path, "bin", "Release", "net48", "sw_drawer.exe"),
-            os.path.join(sw_drawer_path, "bin", "Debug", "net48", "sw_drawer.exe"),
-        ]
-
-        existing = [p for p in candidates if os.path.exists(p)]
-        if not existing:
-            raise FileNotFoundError("SuspensionTools.exe not found. Build the project first.")
-
-        latest = max(existing, key=lambda p: os.path.getmtime(p))
-        self.status_text.append(f"Using executable: {latest}")
-        return latest
-    
     def run_hardpoint_command(self, cmd, worker=None):
         """Run a hardpoint command using subprocess."""
         try:
@@ -1505,15 +1488,16 @@ class CoordinateInsertionTab(QWidget):
             QMessageBox.warning(self, "No Project", "Set a project folder in the Project tab first.")
             return
 
-        marker_path = os.path.join(os.path.dirname(__file__), "Marker.SLDPRT")
+        marker_path = get_resource_path("Marker.SLDPRT")
         if not os.path.exists(marker_path):
-            QMessageBox.critical(self, "Missing Marker", "Marker.SLDPRT not found in plugin root folder")
+            QMessageBox.critical(self, "Missing Marker", f"Marker.SLDPRT not found at {marker_path}")
             return
 
         self.start_loading("Inserting wheel coordinates...")
 
         try:
-            exe_path = self._get_latest_suspension_tools_exe()
+            exe_path = find_suspension_tools_exe()
+            self.status_text.append(f"Using executable: {exe_path}")
             cmd = [exe_path, "hardpoints", "addwheels", project_path, marker_path]
 
             self.worker = HardpointWorker(self.run_hardpoint_command, cmd)
@@ -1685,8 +1669,7 @@ class PoseCreationTab(QWidget):
 
     def _get_exe(self):
         """Get the SuspensionTools executable path."""
-        from pose_creation import get_suspension_tools_exe
-        return get_suspension_tools_exe()
+        return find_suspension_tools_exe()
 
     def refresh_poses(self):
         """Query SolidWorks for existing poses and populate the list."""

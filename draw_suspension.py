@@ -252,36 +252,9 @@ def set_marker_visibility_by_name(substring: str, visible: bool) -> bool:
     return _run_marker_command("vis", "name", "show" if visible else "hide", substring)
 
 
-def _get_suspension_tools_exe():
-    """Get the path to SuspensionTools.exe"""
-    import os
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Check multiple possible locations
-    paths_to_check = [
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net48", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net6.0", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net6.0", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "net8.0", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "net8.0", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Release", "SuspensionTools.exe"),
-        os.path.join(script_dir, "sw_drawer", "bin", "Debug", "SuspensionTools.exe"),
-    ]
-    
-    for path in paths_to_check:
-        if os.path.exists(path):
-            return path
-    
-    raise FileNotFoundError(
-        "SuspensionTools.exe not found. Run 'dotnet build -c Release' in the sw_drawer folder first.\n"
-        f"Searched in: {paths_to_check[0]}"
-    )
-
-
 def create_all_markers_with_worker(radius_mm, worker=None):
     """Create all markers with abort support via worker."""
-    exe_path = _get_suspension_tools_exe()
+    exe_path = find_suspension_tools_exe()
     args = [exe_path, "marker", "createall", str(radius_mm)]
     
     print(f"Running: {' '.join(args)}")
@@ -315,7 +288,7 @@ def create_all_markers_with_worker(radius_mm, worker=None):
 
 def delete_all_markers_with_worker(worker=None):
     """Delete all markers with abort support via worker."""
-    exe_path = _get_suspension_tools_exe()
+    exe_path = find_suspension_tools_exe()
     args = [exe_path, "marker", "deleteall"]
     
     print(f"Running: {' '.join(args)}")
