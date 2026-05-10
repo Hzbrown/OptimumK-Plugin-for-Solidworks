@@ -36,14 +36,18 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="SolidWorks.Interop.sldworks">
       <HintPath>$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll</HintPath>
-      <Private>false</Private>
-      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>true</Private>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
     </Reference>
     <Reference Include="SolidWorks.Interop.swconst">
       <HintPath>$(SolidWorksApiPath)\SolidWorks.Interop.swconst.dll</HintPath>
-      <Private>false</Private>
-      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>true</Private>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
     </Reference>
   </ItemGroup>
   
+  <Target Name="CopySolidWorksDlls" AfterTargets="Build">
+    <Copy SourceFiles="$(SolidWorksApiPath)\SolidWorks.Interop.sldworks.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(SolidWorksApiPath)\SolidWorks.Interop.swconst.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
